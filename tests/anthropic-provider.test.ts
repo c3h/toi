@@ -1,0 +1,44 @@
+import { describe, expect, it } from 'vitest';
+import type { FetchLike } from '../src/adapters/anthropic/fetch';
+import { AnthropicProvider } from '../src/adapters/anthropic/provider';
+import { collect, sse, streamOf } from './helpers';
+
+describe('AnthropicProvider', () => {
+  it('monta o POST com headers obrigatórios e payload de texto', async () => {
+    let captured: { url: string; init: RequestInit | undefined } | null = null;
+
+    const fetchImpl: FetchLike = async (input, init) => {
+      captured = { url: String(input), init };
+      return new Response(
+        streamOf([sse([{ event: 'message_stop', data: { type: 'message_stop' } }])]),
+        { status: 200, headers: { 'content-type': 'text/event-stream' } },
+      );
+    };
+
+    const provider = new AnthropicProvider('sk-test', fetchImpl);
+
+    const events = await collect(
+      provider.stream(
+        { model: 'claude-test', maxTokens: 128, messages: [{ role: 'user', content: 'oi' }] },
+        new AbortController().signal,
+      ),
+    );
+
+    expect(events).toEqual([{ type: 'finished' }]);
+    expect(captured).not.toBeNull();
+    expect(captured!.url).toBe('https://api.anthropic.com/v1/messages');
+    expect(captured!.init?.method).toBe('POST');
+    expect(captured!.init?.headers).toMatchObject({
+      'content-type': 'application/json',
+      'x-api-key': 'sk-test',
+      'anthropic-version': '2023-06-01',
+      'anthropic-dangerous-direct-browser-access': 'true',
+    });
+    expect(JSON.parse(captured!.init?.body as string)).toEqual({
+      model: 'claude-test',
+      max_tokens: 128,
+      stream: true,
+      messages: [{ role: 'user', content: 'oi' }],
+    });
+  });
+});
