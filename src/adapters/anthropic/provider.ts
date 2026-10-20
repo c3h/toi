@@ -1,0 +1,37 @@
+import { AppError } from '../../domain/error';
+import type { Model } from '../../domain/model';
+import type { StreamEvent } from '../../domain/stream';
+import type { ChatProvider, ChatRequest } from '../../ports/chat-provider';
+import { anthropicFetch, type FetchLike } from './fetch';
+import { fetchModels } from './models';
+import { toAnthropicPayload } from './request';
+import { mapAnthropicStream } from './stream';
+
+const MESSAGES_URL = 'https://api.anthropic.com/v1/messages';
+
+export class AnthropicProvider implements ChatProvider {
+  readonly #apiKey: string;
+  readonly #fetch: FetchLike;
+
+  constructor(apiKey: string, fetchImpl: FetchLike = (input, init) => fetch(input, init)) {
+    this.#apiKey = apiKey;
+    this.#fetch = fetchImpl;
+  }
+
+  listModels(signal: AbortSignal): Promise<Model[]> {
+    return fetchModels(this.#apiKey, this.#fetch, signal);
+  }
+
+  async *stream(request: ChatRequest, signal: AbortSignal): AsyncGenerator<StreamEvent> {
+    const response = await anthropicFetch(this.#fetch, this.#apiKey, MESSAGES_URL, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(toAnthropicPayload(request)),
+      signal,
+    });
+
+    if (!response.body) throw new AppError('unknown', 'A Anthropic respondeu sem corpo.');
+
+    yield* mapAnthropicStream(response.body);
+  }
+}
