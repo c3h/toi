@@ -1,0 +1,38 @@
+:root {
+  color-scheme: light dark;
+  font-family: ui-sans-serif, system-ui, -apple-system, sans-serif;
+  background: Canvas;
+  color: CanvasText;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+}
+
+.shell {
+  min-height: 100dvh;
+  display: grid;
+  place-content: center;
+  gap: 0.5rem;
+  padding: 2rem;
+  text-align: center;
+}
+
+.shell h1 {
+  margin: 0;
+  font-size: 2.5rem;
+  letter-spacing: -0.04em;
+}
+
+.shell p {
+  margin: 0;
+  max-width: 42ch;
+}
+
+.muted {
+  opacity: 0.6;
+}
