@@ -1,5 +1,12 @@
 import { titleFrom, type Conversation } from '../domain/conversation';
-import { AppError, isAbortError, toErrorInfo, type AppErrorInfo } from '../domain/error';
+import {
+  AppError,
+  appError,
+  isAbortError,
+  toErrorInfo,
+  truncatedError,
+  type AppErrorInfo,
+} from '../domain/error';
 import type { ConversationId, MessageId } from '../domain/ids';
 import {
   appendText,
@@ -14,7 +21,7 @@ import type { Clock } from '../ports/clock';
 import type { ConversationStore } from '../ports/conversation-store';
 import type { TokenEstimator } from '../ports/token-estimator';
 import { buildRequest } from './build-request';
-import { createFlusher } from './flusher';
+import { createFlusher, type Flusher } from './flusher';
 
 const DEFAULT_FLUSH_INTERVAL_MS = 300;
 
@@ -36,31 +43,45 @@ export interface SendOptions {
   signal: AbortSignal;
 }
 
+export interface RetryOptions {
+  conversationId: ConversationId;
+  messageId: MessageId;
+  model: Model;
+  signal: AbortSignal;
+}
+
 export interface RunResult {
   message: Message;
   truncated: boolean;
+  persistError: AppErrorInfo | null;
+}
+
+export interface MessageRun {
+  result: Promise<RunResult>;
+  flush(): Promise<void>;
 }
 
 const asAppError = (error: unknown): AppError =>
-  error instanceof AppError
-    ? error
-    : new AppError('unknown', 'Algo deu errado.', { cause: error });
+  error instanceof AppError ? error : appError('unknown', { cause: error });
+
+const storageFailed = (cause: unknown): AppErrorInfo =>
+  toErrorInfo(appError('storage_failed', { cause }));
 
 const nextSeq = (messages: Message[]): number => (messages.at(-1)?.seq ?? 0) + 1;
 
+interface AssistantRun {
+  conversation: Conversation;
+  history: Message[];
+  assistant: Message;
+  model: Model;
+  signal: AbortSignal;
+}
+
 const runAssistant = async (
   deps: RunDeps,
-  conversation: Conversation,
-  history: Message[],
-  assistant: Message,
-  model: Model,
-  signal: AbortSignal,
+  { conversation, history, assistant, model, signal }: AssistantRun,
+  flusher: Flusher<Message>,
 ): Promise<RunResult> => {
-  const flusher = createFlusher<Message>(
-    (message) => deps.store.putMessage(message),
-    deps.flushIntervalMs ?? DEFAULT_FLUSH_INTERVAL_MS,
-  );
-
   let draft = assistant;
   let finished = false;
   let truncated = false;
@@ -97,7 +118,7 @@ const runAssistant = async (
           break;
 
         case 'usage':
-          apply({ ...draft, usage: event.usage });
+          apply({ ...draft, usage: event.usage, stopReason: event.stopReason });
           break;
 
         case 'finished':
@@ -111,24 +132,48 @@ const runAssistant = async (
     }
 
     if (!finished) {
-      throw new AppError('unreachable', 'A resposta terminou antes do fim.');
+      throw truncatedError();
     }
   } catch (cause) {
-    const aborted = signal.aborted || isAbortError(cause);
+    // `finished` é o fim lógico: um erro/abort posterior não reabre a Mensagem.
+    if (!finished) {
+      const aborted = signal.aborted || isAbortError(cause);
 
-    status = aborted ? 'interrupted' : 'failed';
-    error = aborted ? null : toErrorInfo(asAppError(cause));
+      status = aborted ? 'interrupted' : 'failed';
+      error = aborted ? null : toErrorInfo(asAppError(cause));
+    }
   }
 
   apply(closeMessage(draft, status, deps.clock.now(), error));
 
-  await flusher.flush();
-
-  if (status === 'complete') {
-    await deps.store.putConversation({ ...conversation, updatedAt: deps.clock.now() });
+  let persistError: AppErrorInfo | null = null;
+  try {
+    await flusher.flush();
+  } catch (cause) {
+    persistError = storageFailed(cause);
   }
 
-  return { message: draft, truncated };
+  if (status === 'complete') {
+    try {
+      await deps.store.putConversation({ ...conversation, updatedAt: deps.clock.now() });
+    } catch (cause) {
+      persistError ??= storageFailed(cause);
+    }
+  }
+
+  return { message: draft, truncated, persistError };
+};
+
+const startAssistantRun = (deps: RunDeps, run: AssistantRun): MessageRun => {
+  const flusher = createFlusher<Message>(
+    (message) => deps.store.putMessage(message),
+    deps.flushIntervalMs ?? DEFAULT_FLUSH_INTERVAL_MS,
+  );
+
+  return {
+    result: runAssistant(deps, run, flusher),
+    flush: () => flusher.flush(),
+  };
 };
 
 const loadConversation = async (
@@ -144,7 +189,10 @@ const loadConversation = async (
   return { conversation, messages };
 };
 
-export const sendMessage = async (deps: RunDeps, options: SendOptions): Promise<RunResult> => {
+export const startSendMessage = async (
+  deps: RunDeps,
+  options: SendOptions,
+): Promise<MessageRun> => {
   const text = options.text.trim();
   if (!text) throw new Error('sendMessage recebeu texto vazio.');
 
@@ -196,17 +244,19 @@ export const sendMessage = async (deps: RunDeps, options: SendOptions): Promise<
   await deps.store.putMessage(assistant);
   deps.onUpdate?.(user);
 
-  return runAssistant(deps, updated, [...messages, user], assistant, options.model, options.signal);
+  return startAssistantRun(deps, {
+    conversation: updated,
+    history: [...messages, user],
+    assistant,
+    model: options.model,
+    signal: options.signal,
+  });
 };
 
-export interface RetryOptions {
-  conversationId: ConversationId;
-  messageId: MessageId;
-  model: Model;
-  signal: AbortSignal;
-}
-
-export const retryMessage = async (deps: RunDeps, options: RetryOptions): Promise<RunResult> => {
+export const startRetryMessage = async (
+  deps: RunDeps,
+  options: RetryOptions,
+): Promise<MessageRun> => {
   const { conversation, messages } = await loadConversation(deps.store, options.conversationId);
   const target = messages.find((message) => message.id === options.messageId);
 
@@ -239,12 +289,11 @@ export const retryMessage = async (deps: RunDeps, options: RetryOptions): Promis
   await deps.store.putConversation(updated);
   await deps.store.putMessage(assistant);
 
-  return runAssistant(
-    deps,
-    updated,
-    messages.filter((message) => message.id !== target.id),
+  return startAssistantRun(deps, {
+    conversation: updated,
+    history: messages.filter((message) => message.id !== target.id),
     assistant,
-    options.model,
-    options.signal,
-  );
+    model: options.model,
+    signal: options.signal,
+  });
 };
