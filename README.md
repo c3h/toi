@@ -4,9 +4,9 @@ Chat local-first com modelos da Anthropic. Abra, cole sua Chave, converse. O his
 
 ## Estado
 
-O núcleo está implementado: domínio, adaptador da Anthropic, persistência em IndexedDB e orquestração do Fluxo. A UI ainda é um placeholder — onboarding, histórico, composer e Markdown entram na próxima etapa. Escopo e módulos em `docs/architecture.md` (§1 e §3).
+A v1 está completa. Escopo e desenho em `docs/architecture.md`.
 
-`npm run check` roda typecheck, testes, build e gate de tamanho. O orçamento de performance está em `docs/architecture.md` §9.
+`npm run check` é o gate completo (o que ele roda está em `docs/architecture.md` §11); na primeira vez, `npx playwright install chromium`. O orçamento de performance está em `docs/architecture.md` §9.
 
 ## Rodar
 
