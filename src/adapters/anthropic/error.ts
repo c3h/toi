@@ -1,21 +1,19 @@
-import { AppError, type AppErrorCode } from '../../domain/error';
+import {
+  AppError,
+  messageFor,
+  type AppErrorCode,
+  type AppErrorOptions,
+} from '../../domain/error';
 import type { AnthropicErrorEnvelope } from './types';
 
-const FRIENDLY: Record<AppErrorCode, string> = {
-  invalid_credential: 'Chave inválida ou revogada.',
-  browser_access_blocked: 'Sua organização bloqueia chamadas do navegador.',
-  permission_denied: 'Esta Chave não tem acesso ao Modelo.',
-  model_unavailable: 'Modelo indisponível.',
-  context_overflow: 'A conversa passou do limite do Modelo.',
-  request_too_large: 'O pedido é grande demais.',
-  invalid_request: 'O pedido foi recusado.',
-  rate_limited: 'Limite de requisições atingido.',
-  overloaded: 'O Modelo está sobrecarregado.',
+// Copy que nomeia o Provedor fica no adaptador; o domínio só tem a genérica.
+const ANTHROPIC_MESSAGES: Partial<Record<AppErrorCode, string>> = {
   api_error: 'Erro do lado da Anthropic.',
   unreachable: 'Não foi possível falar com a Anthropic.',
-  aborted: 'Requisição cancelada.',
-  unknown: 'Algo deu errado.',
 };
+
+const anthropicError = (code: AppErrorCode, options: AppErrorOptions = {}): AppError =>
+  new AppError(code, ANTHROPIC_MESSAGES[code] ?? messageFor(code), options);
 
 const isEnvelope = (value: unknown): value is AnthropicErrorEnvelope => {
   if (typeof value !== 'object' || value === null) return false;
@@ -67,7 +65,7 @@ const codeForEvent = (apiType: string): AppErrorCode => {
   }
 };
 
-const parseRetryAfter = (header: string | null): number | null => {
+const parseRetryAfter = (header: string | null, now: number): number | null => {
   if (!header) return null;
 
   const seconds = Number(header);
@@ -76,10 +74,10 @@ const parseRetryAfter = (header: string | null): number | null => {
   const date = Date.parse(header);
   if (Number.isNaN(date)) return null;
 
-  return Math.max(0, Math.ceil((date - Date.now()) / 1000));
+  return Math.max(0, Math.ceil((date - now) / 1000));
 };
 
-export const errorFromResponse = async (response: Response): Promise<AppError> => {
+export const errorFromResponse = async (response: Response, now: number): Promise<AppError> => {
   const body: unknown = await response.json().catch(() => null);
 
   const envelope = isEnvelope(body) ? body : null;
@@ -87,19 +85,19 @@ export const errorFromResponse = async (response: Response): Promise<AppError> =
   const detail = envelope?.error.message ?? response.statusText;
   const code = codeForStatus(response.status, apiType, detail);
 
-  return new AppError(code, FRIENDLY[code], {
+  return anthropicError(code, {
     detail,
-    retryAfterSeconds: parseRetryAfter(response.headers.get('retry-after')),
+    retryAfterSeconds: parseRetryAfter(response.headers.get('retry-after'), now),
   });
 };
 
 export const errorFromEvent = (event: { type: string; message: string }): AppError => {
   const code = codeForEvent(event.type);
-  return new AppError(code, FRIENDLY[code], { detail: event.message });
+  return anthropicError(code, { detail: event.message });
 };
 
 export const unreachableError = (cause: unknown): AppError =>
-  new AppError('unreachable', FRIENDLY.unreachable, { cause });
+  anthropicError('unreachable', { cause });
 
 export const unreadableError = (cause: unknown): AppError =>
   new AppError('unknown', 'A Anthropic enviou uma resposta ilegível.', { cause });

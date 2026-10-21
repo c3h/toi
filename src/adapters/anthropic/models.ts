@@ -1,4 +1,5 @@
 import type { Model } from '../../domain/model';
+import type { Clock } from '../../ports/clock';
 import { unreadableError } from './error';
 import { anthropicFetch, type FetchLike } from './fetch';
 import type { AnthropicModelsPage } from './types';
@@ -11,6 +12,7 @@ export async function fetchModels(
   apiKey: string,
   fetchImpl: FetchLike,
   signal: AbortSignal,
+  clock: Clock,
 ): Promise<Model[]> {
   const models: Model[] = [];
   let afterId: string | null = null;
@@ -20,7 +22,7 @@ export async function fetchModels(
     url.searchParams.set('limit', String(PAGE_LIMIT));
     if (afterId) url.searchParams.set('after_id', afterId);
 
-    const response = await anthropicFetch(fetchImpl, apiKey, url, { signal });
+    const response = await anthropicFetch(fetchImpl, apiKey, url, { signal }, clock);
 
     let body: AnthropicModelsPage;
     try {

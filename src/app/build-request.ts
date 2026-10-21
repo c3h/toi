@@ -1,5 +1,5 @@
 import type { Model } from '../domain/model';
-import { textOf, type Message } from '../domain/message';
+import type { Message, Part } from '../domain/message';
 import type { ChatMessage, ChatRequest } from '../ports/chat-provider';
 import type { TokenEstimator } from '../ports/token-estimator';
 
@@ -18,16 +18,25 @@ export interface BuiltRequest {
   truncated: boolean;
 }
 
+/**
+ * Partes que voltam ao Provedor. Raciocínio fica de fora até existir a decisão
+ * sobre reenviar `signature` (`architecture.md` §1); texto vazio a API recusa.
+ */
+const outgoingParts = (message: Message): Part[] =>
+  message.parts.flatMap((part): Part[] => {
+    if (part.type !== 'text') return [];
+
+    const text = part.text.trim();
+    return text ? [{ type: 'text', text }] : [];
+  });
+
 const mergeAdjacent = (messages: ChatMessage[]): ChatMessage[] => {
   const merged: ChatMessage[] = [];
 
   for (const message of messages) {
     const last = merged[merged.length - 1];
     if (last && last.role === message.role) {
-      merged[merged.length - 1] = {
-        role: last.role,
-        content: `${last.content}\n\n${message.content}`,
-      };
+      merged[merged.length - 1] = { role: last.role, parts: [...last.parts, ...message.parts] };
       continue;
     }
 
@@ -53,13 +62,17 @@ const toTurns = (messages: ChatMessage[]): ChatMessage[][] => {
 };
 
 const costOf = (messages: ChatMessage[], estimator: TokenEstimator): number =>
-  messages.reduce((total, message) => total + estimator.estimate(message.content), 0);
+  messages.reduce(
+    (total, message) =>
+      total + message.parts.reduce((sum, part) => sum + estimator.estimate(part.text), 0),
+    0,
+  );
 
 export const buildRequest = ({ messages, model, estimator }: BuildRequestInput): BuiltRequest => {
   const candidates: ChatMessage[] = messages
     .filter((message) => message.status !== 'streaming')
-    .map((message) => ({ role: message.role, content: textOf(message).trim() }))
-    .filter((message) => message.content.length > 0);
+    .map((message): ChatMessage => ({ role: message.role, parts: outgoingParts(message) }))
+    .filter((message) => message.parts.length > 0);
 
   let normalized = mergeAdjacent(candidates);
 

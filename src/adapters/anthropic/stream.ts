@@ -1,4 +1,4 @@
-import { AppError } from '../../domain/error';
+import { truncatedError } from '../../domain/error';
 import type { StreamEvent } from '../../domain/stream';
 import { emptyUsage, type StopReason, type Usage } from '../../domain/usage';
 import { errorFromEvent, unreadableError } from './error';
@@ -108,6 +108,6 @@ export async function* mapAnthropicStream(
   }
 
   if (!finished) {
-    throw new AppError('unreachable', 'A resposta terminou antes do fim.');
+    throw truncatedError();
   }
 }

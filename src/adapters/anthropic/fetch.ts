@@ -1,4 +1,5 @@
 import { isAbortError } from '../../domain/error';
+import type { Clock } from '../../ports/clock';
 import { errorFromResponse, unreachableError } from './error';
 
 export type FetchLike = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
@@ -8,6 +9,7 @@ export const anthropicFetch = async (
   apiKey: string,
   url: URL | string,
   init: RequestInit & { headers?: Record<string, string> },
+  clock: Clock,
 ): Promise<Response> => {
   let response: Response;
   try {
@@ -25,6 +27,6 @@ export const anthropicFetch = async (
     throw unreachableError(cause);
   }
 
-  if (!response.ok) throw await errorFromResponse(response);
+  if (!response.ok) throw await errorFromResponse(response, clock.now());
   return response;
 };
