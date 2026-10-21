@@ -1,6 +1,6 @@
 import Dexie from 'dexie';
 import type { Conversation } from '../../domain/conversation';
-import type { ConversationId } from '../../domain/ids';
+import type { ConversationId, MessageId } from '../../domain/ids';
 import type { Message } from '../../domain/message';
 import type { ConversationStore } from '../../ports/conversation-store';
 import type { ToiDatabase } from './db';
@@ -36,6 +36,10 @@ export class DexieConversationStore implements ConversationStore {
       .where('[conversationId+seq]')
       .between([conversationId, Dexie.minKey], [conversationId, Dexie.maxKey])
       .toArray();
+  }
+
+  async getMessage(id: MessageId): Promise<Message | null> {
+    return (await this.#db.messages.get(id)) ?? null;
   }
 
   async putMessage(message: Message): Promise<void> {
