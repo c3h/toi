@@ -1,11 +1,18 @@
 import { describe, expect, it } from 'vitest';
-import { sendMessage, retryMessage, type RunDeps } from '../src/app/send-message';
+import {
+  startRetryMessage,
+  startSendMessage,
+  type RetryOptions,
+  type RunDeps,
+  type RunResult,
+  type SendOptions,
+} from '../src/app/send-message';
 import { AppError } from '../src/domain/error';
-import { textOf } from '../src/domain/message';
+import { textOf, type Message } from '../src/domain/message';
 import type { StreamEvent } from '../src/domain/stream';
 import {
   abortError,
-  fixedClock,
+  baseDeps,
   MemoryStore,
   ScriptedProvider,
   testModel,
@@ -22,36 +29,11 @@ const successEvents = (): StreamEvent[] => [
   { type: 'finished' },
 ];
 
-const baseDeps = async (): Promise<{
-  store: MemoryStore;
-  deps: Omit<RunDeps, 'provider'>;
-  clock: ReturnType<typeof fixedClock>;
-}> => {
-  const store = new MemoryStore();
-  const clock = fixedClock(50_000);
-  let next = 0;
+const sendMessage = async (deps: RunDeps, options: SendOptions): Promise<RunResult> =>
+  (await startSendMessage(deps, options)).result;
 
-  await store.putConversation({
-    id: 'c1',
-    title: 'Nova conversa',
-    model: testModel.id,
-    createdAt: 1,
-    updatedAt: 1,
-  });
-
-  return {
-    store,
-    clock,
-    deps: {
-      store,
-      clock,
-      estimator: { estimate: () => 1 },
-      newId: () => `id-${(next += 1)}`,
-      owner: 'tab-a',
-      flushIntervalMs: 60_000,
-    },
-  };
-};
+const retryMessage = async (deps: RunDeps, options: RetryOptions): Promise<RunResult> =>
+  (await startRetryMessage(deps, options)).result;
 
 describe('sendMessage', () => {
   it('persiste user e assistant, faz streaming e fecha em complete', async () => {
@@ -66,7 +48,9 @@ describe('sendMessage', () => {
     expect(result.message.status).toBe('complete');
     expect(textOf(result.message)).toBe('Olá, mundo');
     expect(result.message.usage?.outputTokens).toBe(5);
+    expect(result.message.stopReason).toBe('end_turn');
     expect(result.truncated).toBe(false);
+    expect(result.persistError).toBeNull();
 
     const messages = await store.listMessages('c1');
     expect(messages.map((message) => message.role)).toEqual(['user', 'assistant']);
@@ -78,7 +62,7 @@ describe('sendMessage', () => {
     expect(provider.requests[0]).toEqual({
       model: testModel.id,
       maxTokens: 8_192,
-      messages: [{ role: 'user', content: 'Pergunta' }],
+      messages: [{ role: 'user', parts: [{ type: 'text', text: 'Pergunta' }] }],
     });
   });
 
@@ -140,6 +124,54 @@ describe('sendMessage', () => {
     expect(result.message.status).toBe('failed');
     expect(result.message.error?.code).toBe('overloaded');
     expect(result.message.stream).toBeNull();
+  });
+
+  it('não reabre uma Mensagem finalizada quando o corpo falha depois de finished', async () => {
+    const { deps } = await baseDeps();
+
+    const provider = new ScriptedProvider(async function* (): AsyncGenerator<StreamEvent> {
+      yield* successEvents();
+      throw abortError();
+    });
+
+    const result = await sendMessage(
+      { ...deps, provider },
+      { conversationId: 'c1', text: 'Pergunta', model: testModel, signal: new AbortController().signal },
+    );
+
+    expect(result.message.status).toBe('complete');
+    expect(result.message.error).toBeNull();
+    expect(textOf(result.message)).toBe('Olá, mundo');
+  });
+
+  it('expõe falha de persistência sem derrubar o Fluxo', async () => {
+    class FailingStore extends MemoryStore {
+      fail = false;
+
+      override async putMessage(message: Message): Promise<void> {
+        if (this.fail) throw new Error('disco cheio');
+        await super.putMessage(message);
+      }
+    }
+
+    const store = new FailingStore();
+    const { deps } = await baseDeps(store);
+
+    const provider = new ScriptedProvider(async function* (): AsyncGenerator<StreamEvent> {
+      yield { type: 'started', model: testModel.id, usage: usage(3, 0) };
+      yield { type: 'delta', index: 0, part: 'text', text: 'ok' };
+      store.fail = true;
+      yield { type: 'finished' };
+    });
+
+    const result = await sendMessage(
+      { ...deps, provider },
+      { conversationId: 'c1', text: 'Pergunta', model: testModel, signal: new AbortController().signal },
+    );
+
+    expect(result.message.status).toBe('complete');
+    expect(textOf(result.message)).toBe('ok');
+    expect(result.persistError?.code).toBe('storage_failed');
   });
 
   it('renova o heartbeat do lease a cada Evento do Fluxo', async () => {
@@ -211,6 +243,8 @@ describe('sendMessage', () => {
     expect(messages.filter((message) => message.role === 'assistant')).toHaveLength(1);
     expect(messages[1]?.id).toBe(first.message.id);
 
-    expect(provider.requests[1]?.messages).toEqual([{ role: 'user', content: 'Pergunta' }]);
+    expect(provider.requests[1]?.messages).toEqual([
+      { role: 'user', parts: [{ type: 'text', text: 'Pergunta' }] },
+    ]);
   });
 });

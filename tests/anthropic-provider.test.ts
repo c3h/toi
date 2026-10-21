@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { FetchLike } from '../src/adapters/anthropic/fetch';
 import { AnthropicProvider } from '../src/adapters/anthropic/provider';
+import { toAnthropicPayload } from '../src/adapters/anthropic/request';
 import { collect, sse, streamOf } from './helpers';
 
 describe('AnthropicProvider', () => {
@@ -19,7 +20,11 @@ describe('AnthropicProvider', () => {
 
     const events = await collect(
       provider.stream(
-        { model: 'claude-test', maxTokens: 128, messages: [{ role: 'user', content: 'oi' }] },
+        {
+          model: 'claude-test',
+          maxTokens: 128,
+          messages: [{ role: 'user', parts: [{ type: 'text', text: 'oi' }] }],
+        },
         new AbortController().signal,
       ),
     );
@@ -38,7 +43,44 @@ describe('AnthropicProvider', () => {
       model: 'claude-test',
       max_tokens: 128,
       stream: true,
-      messages: [{ role: 'user', content: 'oi' }],
+      messages: [{ role: 'user', content: [{ type: 'text', text: 'oi' }] }],
+    });
+  });
+
+  it('mapeia system, temperature e raciocínio para o formato da Anthropic', () => {
+    expect(
+      toAnthropicPayload({
+        model: 'claude-test',
+        maxTokens: 128,
+        system: 'Seja breve.',
+        temperature: 0.2,
+        messages: [
+          { role: 'user', parts: [{ type: 'text', text: 'oi' }] },
+          {
+            role: 'assistant',
+            parts: [
+              { type: 'reasoning', text: 'pensando', signature: 'sig' },
+              { type: 'text', text: 'olá' },
+            ],
+          },
+        ],
+      }),
+    ).toEqual({
+      model: 'claude-test',
+      max_tokens: 128,
+      stream: true,
+      system: 'Seja breve.',
+      temperature: 0.2,
+      messages: [
+        { role: 'user', content: [{ type: 'text', text: 'oi' }] },
+        {
+          role: 'assistant',
+          content: [
+            { type: 'thinking', thinking: 'pensando', signature: 'sig' },
+            { type: 'text', text: 'olá' },
+          ],
+        },
+      ],
     });
   });
 });

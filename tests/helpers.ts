@@ -1,11 +1,16 @@
 import type { Conversation } from '../src/domain/conversation';
 import type { Message } from '../src/domain/message';
 import type { Model } from '../src/domain/model';
+import type { ProviderId } from '../src/domain/ids';
 import type { StreamEvent } from '../src/domain/stream';
 import { emptyUsage } from '../src/domain/usage';
 import type { ChatProvider, ChatRequest } from '../src/ports/chat-provider';
+import type { FlowDeps } from '../src/app/flow';
+import { MemoryLocks } from '../src/adapters/locks/memory';
 import type { Clock } from '../src/ports/clock';
 import type { ConversationStore } from '../src/ports/conversation-store';
+import type { CredentialStore } from '../src/ports/credential-store';
+import type { SettingsStore } from '../src/ports/settings-store';
 
 export const testModel: Model = {
   id: 'claude-test',
@@ -48,8 +53,21 @@ export const makeMessage = (
   completedAt: 1_000,
   model: null,
   usage: null,
+  stopReason: null,
   error: null,
   stream: null,
+  ...overrides,
+});
+
+export const makeConversation = (
+  id: string,
+  overrides: Partial<Conversation> = {},
+): Conversation => ({
+  id,
+  title: 'Nova conversa',
+  model: testModel.id,
+  createdAt: 1,
+  updatedAt: 1,
   ...overrides,
 });
 
@@ -82,6 +100,10 @@ export class MemoryStore implements ConversationStore {
       .sort((a, b) => a.seq - b.seq);
   }
 
+  async getMessage(id: string): Promise<Message | null> {
+    return this.messages.get(id) ?? null;
+  }
+
   async putMessage(message: Message): Promise<void> {
     this.messages.set(message.id, message);
   }
@@ -94,10 +116,29 @@ export class MemoryStore implements ConversationStore {
     this.conversations.clear();
     this.messages.clear();
   }
+}
 
-  async clearAll(): Promise<void> {
-    this.conversations.clear();
-    this.messages.clear();
+export class MemoryCredentialStore implements CredentialStore {
+  readonly keys = new Map<ProviderId, string>();
+
+  async get(provider: ProviderId): Promise<string | null> {
+    return this.keys.get(provider) ?? null;
+  }
+
+  async set(provider: ProviderId, key: string): Promise<void> {
+    this.keys.set(provider, key);
+  }
+
+  async delete(provider: ProviderId): Promise<void> {
+    this.keys.delete(provider);
+  }
+}
+
+export class MemorySettingsStore implements SettingsStore {
+  readonly values = new Map<string, unknown>();
+
+  async clear(): Promise<void> {
+    this.values.clear();
   }
 }
 
@@ -139,6 +180,73 @@ export class ScriptedProvider implements ChatProvider {
     }
   }
 }
+
+/** Resposta mínima que fecha em `complete`. */
+export const replyEvents = (text = 'Olá'): StreamEvent[] => [
+  { type: 'started', model: testModel.id, usage: usage(10, 0) },
+  { type: 'delta', index: 0, part: 'text', text },
+  { type: 'finished' },
+];
+
+/** Emite um `delta`, sinaliza `delta` e espera o abort. */
+export const gatedProvider = () => {
+  let signalDelta: () => void = () => undefined;
+  const delta = new Promise<void>((resolve) => {
+    signalDelta = resolve;
+  });
+
+  const provider = new ScriptedProvider(async function* (
+    signal: AbortSignal,
+  ): AsyncGenerator<StreamEvent> {
+    yield { type: 'started', model: testModel.id, usage: usage(3, 0) };
+    yield { type: 'delta', index: 0, part: 'text', text: 'a' };
+    signalDelta();
+
+    await new Promise<never>((_, reject) => {
+      if (signal.aborted) {
+        reject(abortError());
+        return;
+      }
+
+      signal.addEventListener('abort', () => reject(abortError()), { once: true });
+    });
+  });
+
+  return { provider, delta };
+};
+
+interface BuiltDeps {
+  store: MemoryStore;
+  deps: Omit<FlowDeps, 'provider'>;
+  clock: ReturnType<typeof fixedClock>;
+}
+
+/** `FlowDeps` sem Provedor, com locks que simulam outra aba; não grava nada. */
+export const flowDeps = (store = new MemoryStore()): BuiltDeps => {
+  const clock = fixedClock(50_000);
+  let next = 0;
+
+  return {
+    store,
+    clock,
+    deps: {
+      store,
+      clock,
+      estimator: { estimate: () => 1 },
+      newId: () => `id-${(next += 1)}`,
+      owner: 'tab-a',
+      flushIntervalMs: 60_000,
+      locks: new MemoryLocks({ crossTab: true }),
+    },
+  };
+};
+
+/** `flowDeps` com a Conversa `c1` gravada. */
+export const baseDeps = async (store = new MemoryStore()): Promise<BuiltDeps> => {
+  const built = flowDeps(store);
+  await store.putConversation(makeConversation('c1'));
+  return built;
+};
 
 export const jsonResponse = (
   status: number,

@@ -22,7 +22,9 @@ const message = (
     parts: text ? [{ type: 'text', text }] : [],
   });
 
-const estimator = { estimate: (text: string) => text.length };
+const estimator = { estimate: (value: string) => value.length };
+
+const text = (value: string) => ({ type: 'text' as const, text: value });
 
 const model = (overrides: Partial<Model> = {}): Model => ({ ...testModel, ...overrides });
 
@@ -40,9 +42,9 @@ describe('buildRequest', () => {
     });
 
     expect(request.messages).toEqual([
-      { role: 'user', content: 'a\n\nb' },
-      { role: 'assistant', content: 'c' },
-      { role: 'user', content: 'd' },
+      { role: 'user', parts: [text('a'), text('b')] },
+      { role: 'assistant', parts: [text('c')] },
+      { role: 'user', parts: [text('d')] },
     ]);
   });
 
@@ -58,7 +60,7 @@ describe('buildRequest', () => {
       estimator,
     });
 
-    expect(request.messages).toEqual([{ role: 'user', content: 'pergunta' }]);
+    expect(request.messages).toEqual([{ role: 'user', parts: [text('pergunta')] }]);
   });
 
   it('recusa histórico que não termine com o user', () => {
@@ -102,9 +104,9 @@ describe('buildRequest', () => {
 
     expect(truncated).toBe(true);
     expect(request.messages).toEqual([
-      { role: 'user', content: 'a'.repeat(10) },
-      { role: 'assistant', content: 'b'.repeat(10) },
-      { role: 'user', content: 'e'.repeat(10) },
+      { role: 'user', parts: [text('a'.repeat(10))] },
+      { role: 'assistant', parts: [text('b'.repeat(10))] },
+      { role: 'user', parts: [text('e'.repeat(10))] },
     ]);
   });
 
@@ -116,5 +118,29 @@ describe('buildRequest', () => {
     });
 
     expect(truncated).toBe(false);
+  });
+
+  it('envia só Partes de texto, aparadas, e não reenvia raciocínio', () => {
+    const { request } = buildRequest({
+      messages: [
+        makeMessage({ id: '1', conversationId, seq: 1, role: 'user', parts: [text('  oi  ')] }),
+        makeMessage({
+          id: '2',
+          conversationId,
+          seq: 2,
+          role: 'assistant',
+          parts: [{ type: 'reasoning', text: 'pensando', signature: 'sig' }, text('resposta')],
+        }),
+        makeMessage({ id: '3', conversationId, seq: 3, role: 'user', parts: [text('mais')] }),
+      ],
+      model: model(),
+      estimator,
+    });
+
+    expect(request.messages).toEqual([
+      { role: 'user', parts: [text('oi')] },
+      { role: 'assistant', parts: [text('resposta')] },
+      { role: 'user', parts: [text('mais')] },
+    ]);
   });
 });

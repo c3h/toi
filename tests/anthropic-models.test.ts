@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { FetchLike } from '../src/adapters/anthropic/fetch';
 import { fetchModels } from '../src/adapters/anthropic/models';
+import { systemClock } from '../src/ports/clock';
 import { errorEnvelope, jsonResponse } from './helpers';
 
 describe('fetchModels', () => {
@@ -37,7 +38,7 @@ describe('fetchModels', () => {
       });
     };
 
-    const models = await fetchModels('sk-test', fetchImpl, new AbortController().signal);
+    const models = await fetchModels('sk-test', fetchImpl, new AbortController().signal, systemClock);
 
     expect(models.map((model) => model.id)).toEqual(['m1', 'm2']);
     expect(models[1]).toMatchObject({
@@ -58,7 +59,7 @@ describe('fetchModels', () => {
       jsonResponse(401, errorEnvelope('authentication_error', 'invalid key'));
 
     await expect(
-      fetchModels('bad', fetchImpl, new AbortController().signal),
+      fetchModels('bad', fetchImpl, new AbortController().signal, systemClock),
     ).rejects.toMatchObject({ code: 'invalid_credential' });
   });
 });
