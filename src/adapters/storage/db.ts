@@ -1,6 +1,5 @@
 import Dexie, { type Table } from 'dexie';
-import type { Conversation } from '../../domain/conversation';
-import type { Message } from '../../domain/message';
+import type { ConversationRecord, MessageRecord } from './records';
 
 interface SettingRow {
   key: string;
@@ -13,14 +12,15 @@ interface CredentialRow {
 }
 
 export class ToiDatabase extends Dexie {
-  conversations!: Table<Conversation, string>;
-  messages!: Table<Message, string>;
+  conversations!: Table<ConversationRecord, string>;
+  messages!: Table<MessageRecord, string>;
   settings!: Table<SettingRow, string>;
   credentials!: Table<CredentialRow, string>;
 
   constructor(name = 'toi') {
     super(name);
 
+    // Mudou a forma em `records.ts`? Nova `version(n)` com `upgrade()`; nunca editar a anterior.
     this.version(1).stores({
       conversations: 'id, updatedAt',
       messages: 'id, conversationId, [conversationId+seq], status',

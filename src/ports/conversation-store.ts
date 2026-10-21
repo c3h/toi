@@ -2,6 +2,12 @@ import type { Conversation } from '../domain/conversation';
 import type { ConversationId, MessageId } from '../domain/ids';
 import type { Message } from '../domain/message';
 
+/**
+ * Histórico Local. `listConversations` ordena por `updatedAt` decrescente;
+ * `listMessages` ordena por `seq`; os `put*` são upsert. `deleteConversation`
+ * remove as Mensagens junto. A porta não alcança `credentials`: "apagar tudo"
+ * é composição no app.
+ */
 export interface ConversationStore {
   listConversations(): Promise<Conversation[]>;
   getConversation(id: ConversationId): Promise<Conversation | null>;
@@ -12,5 +18,4 @@ export interface ConversationStore {
   putMessage(message: Message): Promise<void>;
   listStreamingMessages(): Promise<Message[]>;
   clearConversations(): Promise<void>;
-  clearAll(): Promise<void>;
 }
