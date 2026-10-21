@@ -15,3 +15,4 @@ O Fluxo segue a mesma lógica: o adaptador traduz os eventos da Anthropic para u
 - O renderizador decide o que mostrar por Parte.
 - Raciocínio fica fora da v1: `thinking` exige `signature` preservada e reenviada, o que é uma decisão própria (ver `architecture.md` §1). O tipo existe no schema, mas não é produzido nem persistido.
 - Cada adaptador novo traduz para os mesmos Eventos; o custo é um mapper por Provedor.
+- A porta `ChatProvider` também recebe Partes, não texto: `ChatMessage.parts` e campos próprios para `system` e `temperature`. O adaptador traduz `reasoning` em `thinking` com `signature`; o `build-request` decide o que volta ao Provedor e, na v1, envia só texto.

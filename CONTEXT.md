@@ -34,8 +34,12 @@ _Avoid_: Stream (em texto corrido), resposta parcial
 Uma atualização atômica dentro de um Fluxo: `started`, `part_started`, `delta`, `part_finished`, `usage` ou `finished`.
 _Avoid_: Chunk, packet
 
+**Lock da Conversa**:
+O direito exclusivo de uma aba de escrever Mensagens numa Conversa. Some quando a aba fecha; Mensagem `streaming` numa Conversa sem dono autoriza a recuperação a marcá-la como `interrupted`.
+_Avoid_: Lease (é o fallback por tempo), mutex
+
 **Lease do Fluxo**:
-O par `owner` + `heartbeatAt` que uma Mensagem `streaming` carrega para indicar que uma aba ainda está gravando. Lease vencido ou ausente autoriza a recuperação a marcar a Mensagem como `interrupted`.
+O par `owner` + `heartbeatAt` que uma Mensagem `streaming` carrega para indicar que uma aba ainda está gravando. Só decide a recuperação quando o navegador não oferece Lock da Conversa: lease vencido ou ausente autoriza marcar a Mensagem como `interrupted`.
 _Avoid_: Lock, heartbeat (isolado)
 
 **Provedor**:
@@ -49,6 +53,10 @@ _Avoid_: Engine, LLM
 **Chave**:
 A credencial da Anthropic fornecida pela pessoa, guardada apenas no navegador.
 _Avoid_: Token, secret, senha
+
+**Exportação**:
+Um retrato do histórico Local num arquivo versionado, que nunca contém a Chave.
+_Avoid_: Backup (backup é o uso que a pessoa faz do arquivo), dump
 
 **Título**:
 O nome curto de uma Conversa, derivado da primeira Mensagem do user.

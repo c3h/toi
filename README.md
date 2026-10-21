@@ -17,7 +17,7 @@ npm run dev
 
 ## Aviso
 
-O histórico vive no armazenamento do navegador. Limpar os dados do site apaga tudo. O Safari pode descartar esse armazenamento sem uso prolongado; os detalhes e o roadmap de exportação estão em `docs/architecture.md` (§6 e §12).
+O histórico vive no armazenamento do navegador. Limpar os dados do site apaga tudo. O Safari pode descartar esse armazenamento sem uso prolongado; os detalhes e a exportação estão em `docs/architecture.md` §6.
 
 ## Docs
 

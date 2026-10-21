@@ -25,7 +25,8 @@
 - Teste não usa `sleep`; tempo é controlado por fake timers.
 - Erro de Provedor é tipado; a UI nunca mostra a mensagem crua da API.
 - Todo Fluxo tem cancelamento e estado final.
-- Mensagem `streaming` órfã (lease vencido ou ausente) vira `interrupted`.
+- Mensagem `streaming` órfã (Lock da Conversa livre ou, sem Web Locks, lease vencido ou ausente) vira `interrupted`.
+- Uma Conversa recebe Mensagens de uma aba por vez; lock ocupado é `flow_busy`, nunca espera.
 - Nenhuma Mensagem é mutada, exceto a última do assistant ao tentar de novo.
 
 ## Documentação
