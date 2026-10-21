@@ -60,6 +60,9 @@ export class AppError extends Error {
 export const appError = (code: AppErrorCode, options: AppErrorOptions = {}): AppError =>
   new AppError(code, messageFor(code), options);
 
+export const asAppError = (error: unknown): AppError =>
+  error instanceof AppError ? error : appError('unknown', { cause: error });
+
 /** O Fluxo fechou sem `finished`: a conexão caiu no meio da resposta. */
 export const truncatedError = (): AppError =>
   new AppError('unreachable', 'A resposta terminou antes do fim.');

@@ -7,6 +7,10 @@ import type { Message } from '../domain/message';
  * `listMessages` ordena por `seq`; os `put*` são upsert. `deleteConversation`
  * remove as Mensagens junto. A porta não alcança `credentials`: "apagar tudo"
  * é composição no app.
+ *
+ * `watch*` entrega o estado atual e de novo a cada mudança gravada, inclusive
+ * por outra aba; devolve o cancelamento. Durante um Fluxo, o store só vê o
+ * que já passou pelo flush.
  */
 export interface ConversationStore {
   listConversations(): Promise<Conversation[]>;
@@ -18,4 +22,6 @@ export interface ConversationStore {
   putMessage(message: Message): Promise<void>;
   listStreamingMessages(): Promise<Message[]>;
   clearConversations(): Promise<void>;
+  watchConversations(listener: (conversations: Conversation[]) => void): () => void;
+  watchMessages(conversationId: ConversationId, listener: (messages: Message[]) => void): () => void;
 }

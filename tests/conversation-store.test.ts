@@ -4,7 +4,7 @@ import { DexieConversationStore } from '../src/adapters/storage/conversations';
 import { ToiDatabase } from '../src/adapters/storage/db';
 import { DexieSettingsStore } from '../src/adapters/storage/settings';
 import { describeConversationStore } from './conversation-store.contract';
-import { MemoryStore } from './helpers';
+import { MemoryStore, testModel } from './helpers';
 
 let dbCount = 0;
 
@@ -67,5 +67,18 @@ describe('DexieConversationStore: fronteira da Chave', () => {
         provider: 'anthropic',
         apiKey: 'sk-test',
       });
+    }));
+
+  it('DexieSettingsStore guarda o cache de Modelos e o último Modelo', () =>
+    withDb(async (db) => {
+      const settings = new DexieSettingsStore(db);
+      expect(await settings.models()).toBeNull();
+      expect(await settings.lastModel()).toBeNull();
+
+      await settings.saveModels([testModel]);
+      await settings.saveLastModel(testModel.id);
+
+      expect(await settings.models()).toEqual([testModel]);
+      expect(await settings.lastModel()).toBe(testModel.id);
     }));
 });

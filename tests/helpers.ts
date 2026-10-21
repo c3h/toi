@@ -1,4 +1,5 @@
 import type { Conversation } from '../src/domain/conversation';
+import { appError } from '../src/domain/error';
 import type { Message } from '../src/domain/message';
 import type { Model } from '../src/domain/model';
 import type { ProviderId } from '../src/domain/ids';
@@ -74,6 +75,28 @@ export const makeConversation = (
 export class MemoryStore implements ConversationStore {
   readonly conversations = new Map<string, Conversation>();
   readonly messages = new Map<string, Message>();
+  readonly #watchers = new Set<() => void>();
+
+  #changed(): void {
+    for (const watcher of this.#watchers) watcher();
+  }
+
+  #watch<T>(read: () => Promise<T>, listener: (value: T) => void): () => void {
+    const emit = () => void read().then(listener);
+    this.#watchers.add(emit);
+    emit();
+    return () => {
+      this.#watchers.delete(emit);
+    };
+  }
+
+  watchConversations(listener: (conversations: Conversation[]) => void): () => void {
+    return this.#watch(() => this.listConversations(), listener);
+  }
+
+  watchMessages(conversationId: string, listener: (messages: Message[]) => void): () => void {
+    return this.#watch(() => this.listMessages(conversationId), listener);
+  }
 
   async listConversations(): Promise<Conversation[]> {
     return [...this.conversations.values()].sort((a, b) => b.updatedAt - a.updatedAt);
@@ -85,6 +108,7 @@ export class MemoryStore implements ConversationStore {
 
   async putConversation(conversation: Conversation): Promise<void> {
     this.conversations.set(conversation.id, conversation);
+    this.#changed();
   }
 
   async deleteConversation(id: string): Promise<void> {
@@ -92,6 +116,7 @@ export class MemoryStore implements ConversationStore {
     for (const [messageId, message] of this.messages) {
       if (message.conversationId === id) this.messages.delete(messageId);
     }
+    this.#changed();
   }
 
   async listMessages(conversationId: string): Promise<Message[]> {
@@ -106,6 +131,7 @@ export class MemoryStore implements ConversationStore {
 
   async putMessage(message: Message): Promise<void> {
     this.messages.set(message.id, message);
+    this.#changed();
   }
 
   async listStreamingMessages(): Promise<Message[]> {
@@ -115,6 +141,7 @@ export class MemoryStore implements ConversationStore {
   async clearConversations(): Promise<void> {
     this.conversations.clear();
     this.messages.clear();
+    this.#changed();
   }
 }
 
@@ -136,6 +163,22 @@ export class MemoryCredentialStore implements CredentialStore {
 
 export class MemorySettingsStore implements SettingsStore {
   readonly values = new Map<string, unknown>();
+
+  async models(): Promise<Model[] | null> {
+    return (this.values.get('models') as Model[] | undefined) ?? null;
+  }
+
+  async saveModels(models: Model[]): Promise<void> {
+    this.values.set('models', models);
+  }
+
+  async lastModel(): Promise<string | null> {
+    return (this.values.get('lastModel') as string | undefined) ?? null;
+  }
+
+  async saveLastModel(id: string): Promise<void> {
+    this.values.set('lastModel', id);
+  }
 
   async clear(): Promise<void> {
     this.values.clear();
@@ -178,6 +221,13 @@ export class ScriptedProvider implements ChatProvider {
       if (signal.aborted) throw abortError();
       yield event;
     }
+  }
+}
+
+/** Recusa a Chave ao listar Modelos. */
+export class FailingProvider extends ScriptedProvider {
+  override async listModels(): Promise<Model[]> {
+    throw appError('invalid_credential');
   }
 }
 

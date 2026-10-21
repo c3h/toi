@@ -1,9 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import { WebLocks } from '../src/adapters/locks/web';
 import { createToi, type ToiDeps } from '../src/app/toi';
-import { appError } from '../src/domain/error';
-import type { Model } from '../src/domain/model';
 import {
+  FailingProvider,
   flowDeps,
   gatedProvider,
   makeConversation,
@@ -30,12 +29,6 @@ const setup = async () => {
 
   return { store, credentials, settings, clock, deps };
 };
-
-class FailingProvider extends ScriptedProvider {
-  override async listModels(): Promise<Model[]> {
-    throw appError('invalid_credential');
-  }
-}
 
 describe('createToi', () => {
   it('abre desconectado quando não há Chave', async () => {
@@ -317,5 +310,55 @@ describe('createToi', () => {
 
     expect((await pending).message.status).toBe('interrupted');
     expect(await store.listConversations()).toEqual([]);
+  });
+
+  it('connect guarda o cache de Modelos e refreshModels o atualiza', async () => {
+    const { settings, deps } = await setup();
+    const toi = await createToi(deps);
+
+    await expect(toi.refreshModels()).rejects.toMatchObject({ code: 'not_connected' });
+    expect(await toi.models()).toBeNull();
+
+    await toi.connect('sk-test');
+    expect(await toi.models()).toEqual([testModel]);
+
+    settings.values.delete('models');
+    expect(await toi.refreshModels()).toEqual([testModel]);
+    expect(await toi.models()).toEqual([testModel]);
+  });
+
+  it('changeModel troca o Modelo da Conversa sem reordenar e vira o default', async () => {
+    const { store, deps } = await setup();
+    await store.putConversation(makeConversation('c1', { updatedAt: 5 }));
+    const toi = await createToi(deps);
+
+    const updated = await toi.changeModel('c1', 'claude-outro');
+
+    expect(updated).toMatchObject({ model: 'claude-outro', updatedAt: 5 });
+    expect(await toi.lastModel()).toBe('claude-outro');
+  });
+
+  it('subscribe recebe as Mensagens do envio até o estado final', async () => {
+    const { store, credentials, deps } = await setup();
+    await credentials.set('anthropic', 'sk-test');
+    await store.putConversation(makeConversation('c1'));
+    const toi = await createToi({
+      ...deps,
+      createProvider: () => new ScriptedProvider(replyEvents('Olá')),
+    });
+
+    const seen: Array<[string, string]> = [];
+    const unsubscribe = toi.subscribe((message) => seen.push([message.role, message.status]));
+
+    await toi.flow.send({ conversationId: 'c1', text: 'Pergunta', model: testModel });
+
+    expect(seen[0]).toEqual(['user', 'complete']);
+    expect(seen[1]).toEqual(['assistant', 'streaming']);
+    expect(seen.at(-1)).toEqual(['assistant', 'complete']);
+
+    unsubscribe();
+    const count = seen.length;
+    await toi.flow.send({ conversationId: 'c1', text: 'Outra', model: testModel });
+    expect(seen).toHaveLength(count);
   });
 });

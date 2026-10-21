@@ -1,4 +1,4 @@
-import Dexie from 'dexie';
+import Dexie, { liveQuery } from 'dexie';
 import type { Conversation } from '../../domain/conversation';
 import type { ConversationId, MessageId } from '../../domain/ids';
 import type { Message } from '../../domain/message';
@@ -67,4 +67,25 @@ export class DexieConversationStore implements ConversationStore {
       await this.#db.messages.clear();
     });
   }
+
+  watchConversations(listener: (conversations: Conversation[]) => void): () => void {
+    return watch(() => this.listConversations(), listener);
+  }
+
+  watchMessages(
+    conversationId: ConversationId,
+    listener: (messages: Message[]) => void,
+  ): () => void {
+    return watch(() => this.listMessages(conversationId), listener);
+  }
 }
+
+/** `liveQuery` reexecuta a leitura quando a tabela muda, também em outra aba. */
+const watch = <T>(query: () => Promise<T>, listener: (value: T) => void): (() => void) => {
+  const subscription = liveQuery(query).subscribe({
+    next: listener,
+    // Leitura que falha não tem para onde ir: a próxima mudança tenta de novo.
+    error: () => undefined,
+  });
+  return () => subscription.unsubscribe();
+};

@@ -1,7 +1,7 @@
 import { titleFrom, type Conversation } from '../domain/conversation';
 import {
-  AppError,
   appError,
+  asAppError,
   isAbortError,
   toErrorInfo,
   truncatedError,
@@ -60,9 +60,6 @@ export interface MessageRun {
   result: Promise<RunResult>;
   flush(): Promise<void>;
 }
-
-const asAppError = (error: unknown): AppError =>
-  error instanceof AppError ? error : appError('unknown', { cause: error });
 
 const storageFailed = (cause: unknown): AppErrorInfo =>
   toErrorInfo(appError('storage_failed', { cause }));
@@ -243,6 +240,7 @@ export const startSendMessage = async (
   await deps.store.putMessage(user);
   await deps.store.putMessage(assistant);
   deps.onUpdate?.(user);
+  deps.onUpdate?.(assistant);
 
   return startAssistantRun(deps, {
     conversation: updated,
@@ -288,6 +286,7 @@ export const startRetryMessage = async (
 
   await deps.store.putConversation(updated);
   await deps.store.putMessage(assistant);
+  deps.onUpdate?.(assistant);
 
   return startAssistantRun(deps, {
     conversation: updated,

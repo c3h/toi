@@ -48,6 +48,20 @@ export const renameConversation = async (
   return updated;
 };
 
+/** O seletor muda a Conversa atual; o `updatedAt` não muda porque nada foi dito. */
+export const changeModel = async (
+  deps: ConversationDeps,
+  id: ConversationId,
+  model: string,
+): Promise<Conversation | null> => {
+  const conversation = await deps.store.getConversation(id);
+  if (!conversation) return null;
+
+  const updated: Conversation = { ...conversation, model };
+  await deps.store.putConversation(updated);
+  return updated;
+};
+
 export const deleteConversation = async (
   deps: ConversationDeps,
   id: ConversationId,

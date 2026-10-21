@@ -1,6 +1,7 @@
 import type { Conversation } from '../../domain/conversation';
 import type { AppErrorCode } from '../../domain/error';
 import type { Message, MessageStatus, Part } from '../../domain/message';
+import type { Model } from '../../domain/model';
 import type { StopReason } from '../../domain/usage';
 
 /**
@@ -121,4 +122,29 @@ export const fromMessageRecord = (record: MessageRecord): Message => ({
   stopReason: record.stopReason,
   error: record.error && { ...record.error },
   stream: record.stream && { ...record.stream },
+});
+
+/** Item do cache de Modelos em `settings`. */
+export interface ModelRecord {
+  id: string;
+  displayName: string;
+  maxTokens: number | null;
+  maxInputTokens: number | null;
+  createdAt: string;
+}
+
+export const toModelRecord = (model: Model): ModelRecord => ({
+  id: model.id,
+  displayName: model.displayName,
+  maxTokens: model.maxTokens,
+  maxInputTokens: model.maxInputTokens,
+  createdAt: model.createdAt,
+});
+
+export const fromModelRecord = (record: ModelRecord): Model => ({
+  id: record.id,
+  displayName: record.displayName,
+  maxTokens: record.maxTokens,
+  maxInputTokens: record.maxInputTokens,
+  createdAt: record.createdAt,
 });
