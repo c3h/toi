@@ -1,6 +1,6 @@
 import type { AppErrorInfo } from './error';
 import type { ConversationId, MessageId } from './ids';
-import type { Usage } from './usage';
+import type { StopReason, Usage } from './usage';
 
 export type Part = { type: 'text'; text: string } | { type: 'reasoning'; text: string; signature: string };
 
@@ -24,11 +24,20 @@ export interface Message {
   completedAt: number | null;
   model: string | null;
   usage: Usage | null;
+  stopReason: StopReason | null;
   error: AppErrorInfo | null;
   stream: StreamLease | null;
 }
 
 export const leaseOf = (owner: string, now: number): StreamLease => ({ owner, heartbeatAt: now });
+
+export const DEFAULT_LEASE_MS = 15_000;
+
+export const isLeaseExpired = (
+  lease: StreamLease | null,
+  now: number,
+  leaseMs = DEFAULT_LEASE_MS,
+): boolean => lease === null || now - lease.heartbeatAt >= leaseMs;
 
 export const closeMessage = (
   message: Message,

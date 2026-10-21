@@ -163,6 +163,7 @@ export const sendMessage = async (deps: RunDeps, options: SendOptions): Promise<
     completedAt: now,
     model: null,
     usage: null,
+    stopReason: null,
     error: null,
     stream: null,
   };
@@ -178,6 +179,7 @@ export const sendMessage = async (deps: RunDeps, options: SendOptions): Promise<
     completedAt: null,
     model: options.model.id,
     usage: null,
+    stopReason: null,
     error: null,
     stream: leaseOf(deps.owner, now),
   };
@@ -227,6 +229,7 @@ export const retryMessage = async (deps: RunDeps, options: RetryOptions): Promis
     status: 'streaming',
     completedAt: null,
     usage: null,
+    stopReason: null,
     error: null,
     stream: leaseOf(deps.owner, now),
   };

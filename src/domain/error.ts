@@ -11,13 +11,37 @@ export type AppErrorCode =
   | 'api_error'
   | 'unreachable'
   | 'aborted'
+  | 'not_connected'
+  | 'flow_busy'
+  | 'storage_failed'
   | 'unknown';
 
-interface AppErrorOptions {
+export interface AppErrorOptions {
   detail?: string;
   retryAfterSeconds?: number | null;
   cause?: unknown;
 }
+
+const MESSAGES: Record<AppErrorCode, string> = {
+  invalid_credential: 'Chave inválida ou revogada.',
+  browser_access_blocked: 'Sua organização bloqueia chamadas do navegador.',
+  permission_denied: 'Esta Chave não tem acesso ao Modelo.',
+  model_unavailable: 'Modelo indisponível.',
+  context_overflow: 'A conversa passou do limite do Modelo.',
+  request_too_large: 'O pedido é grande demais.',
+  invalid_request: 'O pedido foi recusado.',
+  rate_limited: 'Limite de requisições atingido.',
+  overloaded: 'O Modelo está sobrecarregado.',
+  api_error: 'Erro do lado do serviço.',
+  unreachable: 'Sem conexão com o serviço.',
+  aborted: 'Requisição cancelada.',
+  not_connected: 'Conecte uma Chave para conversar.',
+  flow_busy: 'Espere a operação atual terminar, nesta ou em outra aba.',
+  storage_failed: 'Não foi possível salvar tudo no navegador.',
+  unknown: 'Algo deu errado.',
+};
+
+export const messageFor = (code: AppErrorCode): string => MESSAGES[code];
 
 export class AppError extends Error {
   readonly code: AppErrorCode;
@@ -32,6 +56,13 @@ export class AppError extends Error {
     this.retryAfterSeconds = options.retryAfterSeconds ?? null;
   }
 }
+
+export const appError = (code: AppErrorCode, options: AppErrorOptions = {}): AppError =>
+  new AppError(code, messageFor(code), options);
+
+/** O Fluxo fechou sem `finished`: a conexão caiu no meio da resposta. */
+export const truncatedError = (): AppError =>
+  new AppError('unreachable', 'A resposta terminou antes do fim.');
 
 export interface AppErrorInfo {
   code: AppErrorCode;
