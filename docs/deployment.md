@@ -27,6 +27,12 @@ Nenhuma Chave da Anthropic é configurada no GitHub ou no Cloudflare. Cada
 pessoa informa a sua na aplicação. Analytics, beacon e injeção de scripts do
 host ficam desativados.
 
+O HTML usa `Cache-Control: no-transform` em `public/_headers` para impedir
+injeção de JavaScript Detections pelo host. A diretiva só se aplica ao HTML:
+os assets continuam recebendo a compressão do Cloudflare. O Network Error
+Logging (NEL) da zona também precisa ficar desativado, pois instrui o navegador
+a enviar relatórios de rede ao Cloudflare.
+
 ## Publicar uma instância própria
 
 1. Faça um fork e siga [CONTRIBUTING.md](../CONTRIBUTING.md) para preparar o ambiente.
