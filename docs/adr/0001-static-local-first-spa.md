@@ -1,6 +1,6 @@
 # O Toi é um SPA estático, sem backend
 
-O produto existe para a pessoa abrir uma URL, colar a Chave e conversar sem que nada seja gravado em servidor. Um backend só teria três funções possíveis: esconder a Chave, servir arquivos ou sincronizar dados — e as duas primeiras não valem a operação. Decidimos publicar um build estático (Vite) que roda inteiro no navegador: nenhuma rota de API, nenhum banco, nenhuma conta. O deploy é um conjunto de arquivos estáticos com headers, como Cloudflare Pages.
+O produto existe para a pessoa abrir uma URL, colar a Chave e conversar sem que nada seja gravado em servidor. Um backend só teria três funções possíveis: esconder a Chave, servir arquivos ou sincronizar dados — e as duas primeiras não valem a operação. Decidimos publicar um build estático (Vite) que roda inteiro no navegador: nenhuma rota de API, nenhum banco, nenhuma conta. O deploy é um conjunto de arquivos estáticos com headers, servido pelo Cloudflare Workers Static Assets ([publicação](../deployment.md)).
 
 ## Considered Options
 

@@ -240,7 +240,7 @@ Toda Mensagem reenvia o histórico, com os Anexos. `build-request` estima tokens
 **Modelo de ameaça.** Quem tem acesso ao perfil do navegador; código malicioso rodando na origem; dependência comprometida. Fora do escopo: a Anthropic (que recebe a Conversa por contrato), interceptação de rede (TLS) e acesso físico ao disco.
 
 - A Chave fica no IndexedDB, nunca em URL, log, mensagem de erro ou exportação.
-- CSP de produção em `public/_headers` (Cloudflare Pages e equivalentes): `default-src` e `script-src` em `'self'`, `connect-src` só `'self'` e `https://api.anthropic.com`, `object-src`, `base-uri`, `frame-ancestors` e `form-action` em `'none'`. O header é a fonte da verdade. Se o host não permitir headers, o fallback `<meta http-equiv="Content-Security-Policy">` ignora `frame-ancestors`, `base-uri` e `form-action` — nesse caso o host está errado para este produto.
+- CSP de produção em `public/_headers` (Cloudflare Workers Static Assets e equivalentes): `default-src` e `script-src` em `'self'`, `connect-src` só `'self'` e `https://api.anthropic.com`, `object-src`, `base-uri`, `frame-ancestors` e `form-action` em `'none'`. O header é a fonte da verdade. Se o host não permitir headers, o fallback `<meta http-equiv="Content-Security-Policy">` ignora `frame-ancestors`, `base-uri` e `form-action` — nesse caso o host está errado para este produto.
 
 - UI: sem `dangerouslySetInnerHTML`; Markdown sem `rehype-raw`; links externos com `rel="noopener noreferrer"` e `target="_blank"`.
 - Sem script, fonte ou analytics de terceiro. Ícones (lucide) e fontes (Geist Mono e Lora via `@fontsource-variable`) vão no bundle. O único script fora do bundle é `public/theme.js`, servido pela própria origem.
@@ -301,6 +301,8 @@ Tudo da tabela está instalado. `npm run check` roda typecheck, Vitest (Node e b
 | Gate: size-limit | o orçamento da §9 precisa falhar `npm run size`/`npm run check` |
 
 Sem router na v1: uma tela, Conversa selecionada em estado da UI. Sem SDK de IA: o adaptador é pequeno e o contrato que queremos é o do domínio.
+
+Publicação, domínio e CI/CD estão em [deployment.md](deployment.md).
 
 ## 12. Depois da v1
 

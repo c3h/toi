@@ -2,6 +2,8 @@
 
 Chat local-first com modelos da Anthropic. Abra, cole sua Chave, converse. O histórico fica no navegador e a única saída de dados é a Conversa enviada à Anthropic para gerar a resposta.
 
+[Abrir o Toi](https://toi.gimigliano.blog) · [Contribuir](CONTRIBUTING.md) · [MIT](LICENSE)
+
 ## Estado
 
 A v1 está completa. Escopo e desenho em `docs/architecture.md`.
@@ -11,7 +13,7 @@ A v1 está completa. Escopo e desenho em `docs/architecture.md`.
 ## Rodar
 
 ```sh
-npm install
+npm ci
 npm run dev
 ```
 
@@ -24,3 +26,5 @@ O histórico vive no armazenamento do navegador. Limpar os dados do site apaga t
 - `CONTEXT.md` — vocabulário do domínio.
 - `docs/architecture.md` — escopo, desenho, erros, segurança e performance.
 - `docs/adr/` — decisões e porquês.
+- [Publicação](docs/deployment.md) — domínio, CI/CD e deploy próprio.
+- [Contribuir](CONTRIBUTING.md) e [relatar vulnerabilidades](SECURITY.md).

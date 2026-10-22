@@ -6,3 +6,8 @@ tests/ui/__screenshots__
 test-results
 playwright-report
 .vitest-attachments
+.wrangler
+.env
+.env.*
+.dev.vars
+.dev.vars.*

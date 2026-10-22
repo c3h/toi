@@ -7,12 +7,13 @@
     "dev": "vite",
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview",
-    "test": "vitest run",
+    "test": "vitest run --project=node && vitest run --project=browser",
     "test:watch": "vitest",
     "test:e2e": "vite build && playwright test",
     "typecheck": "tsc --noEmit",
     "size": "size-limit",
-    "check": "npm run typecheck && npm test && npm run build && npm run size && playwright test"
+    "check": "npm run typecheck && npm test && npm run build && npm run size && playwright test",
+    "deploy": "wrangler deploy"
   },
   "dependencies": {
     "@fontsource-variable/geist-mono": "^5.3.0",
@@ -43,6 +44,20 @@
     "typescript": "^5.9.0",
     "vite": "^7.0.0",
     "vitest": "^4.0.0",
-    "vitest-browser-react": "^2.3.0"
+    "vitest-browser-react": "^2.3.0",
+    "wrangler": "4.151.3"
+  },
+  "description": "Chat local-first com modelos da Anthropic, direto do navegador.",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/c3h/toi.git"
+  },
+  "homepage": "https://toi.gimigliano.blog",
+  "bugs": {
+    "url": "https://github.com/c3h/toi/issues"
+  },
+  "engines": {
+    "node": ">=26.12.1"
   }
 }
