@@ -20,6 +20,7 @@ const LAST_MODEL_KEY = 'lastModel';
 const LAST_EFFORT_KEY = 'lastEffort';
 const MODEL_PICKS_KEY = 'modelPicks';
 const TOOL_SPACE_KEY = 'toolSpace';
+const TITLE_MODEL_KEY = 'titleModel';
 
 export class DexieSettingsStore implements SettingsStore {
   readonly #db: ToiDatabase;
@@ -71,6 +72,15 @@ export class DexieSettingsStore implements SettingsStore {
 
   async saveToolSpace(space: ToolSpace): Promise<void> {
     await this.#db.settings.put({ key: TOOL_SPACE_KEY, value: space });
+  }
+
+  async titleModel(): Promise<ModelRef | null> {
+    const row = await this.#db.settings.get(TITLE_MODEL_KEY);
+    return row ? fromModelRefRecord(row.value as ModelRefRecord) : null;
+  }
+
+  async saveTitleModel(model: ModelRef): Promise<void> {
+    await this.#db.settings.put({ key: TITLE_MODEL_KEY, value: toModelRefRecord(model) });
   }
 
   async clear(): Promise<void> {
