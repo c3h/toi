@@ -605,7 +605,10 @@ export default function Settings({
     }, 'histórico exportado.');
 
   return (
-    <div className="min-h-0 flex-1 overflow-y-auto">
+    <div
+      // `relative`: o que é absoluto dentro (como `sr-only`) rola aqui, não estica a página.
+      className="relative min-h-0 flex-1 overflow-y-auto"
+    >
       <div className="mx-auto w-[min(100%-2rem,44rem)] py-10 sm:py-14">
         <header className="mb-12 flex items-baseline justify-between gap-4">
           <h1 className="text-4xl font-bold tracking-tight text-text sm:text-5xl">
