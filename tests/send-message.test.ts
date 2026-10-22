@@ -9,6 +9,7 @@ import {
 } from '../src/app/send-message';
 import { AppError } from '../src/domain/error';
 import { textOf, type Message } from '../src/domain/message';
+import type { Model } from '../src/domain/model';
 import type { StreamEvent } from '../src/domain/stream';
 import {
   abortError,
@@ -42,7 +43,7 @@ describe('sendMessage', () => {
 
     const result = await sendMessage(
       { ...deps, provider },
-      { conversationId: 'c1', text: 'Pergunta', model: testModel, signal: new AbortController().signal },
+      { conversationId: 'c1', text: 'Pergunta', model: testModel, effort: 'low', signal: new AbortController().signal },
     );
 
     expect(result.message.status).toBe('complete');
@@ -62,8 +63,61 @@ describe('sendMessage', () => {
     expect(provider.requests[0]).toEqual({
       model: testModel.id,
       maxTokens: 8_192,
+      effort: 'low',
       messages: [{ role: 'user', parts: [{ type: 'text', text: 'Pergunta' }] }],
     });
+  });
+
+  it('envia o Esforço, grava-o na resposta e na Conversa e lembra Modelo e Esforço para a próxima', async () => {
+    const { store, settings, deps } = await baseDeps();
+    const provider = new ScriptedProvider(successEvents());
+    const other: Model = { ...testModel, id: 'claude-outro' };
+
+    const sent = await sendMessage(
+      { ...deps, provider },
+      { conversationId: 'c1', text: 'Pergunta', model: testModel, effort: 'xhigh', signal: new AbortController().signal },
+    );
+
+    expect(provider.requests[0]?.effort).toBe('xhigh');
+    expect(sent.message.effort).toBe('xhigh');
+    expect((await store.getConversation('c1'))?.effort).toBe('xhigh');
+    expect(await settings.lastModel()).toEqual({ provider: testModel.provider, id: testModel.id });
+    expect(await settings.lastEffort()).toBe('xhigh');
+
+    const retried = await retryMessage(
+      { ...deps, provider },
+      {
+        conversationId: 'c1',
+        messageId: sent.message.id,
+        model: other,
+        effort: 'max',
+        signal: new AbortController().signal,
+      },
+    );
+
+    expect(provider.requests[1]?.effort).toBe('max');
+    expect(retried.message.effort).toBe('max');
+    expect((await store.getConversation('c1'))?.effort).toBe('max');
+    expect(await settings.lastModel()).toEqual({ provider: other.provider, id: other.id });
+    expect(await settings.lastEffort()).toBe('max');
+  });
+
+  it('envia mesmo quando não consegue lembrar Modelo e Esforço', async () => {
+    const { deps } = await baseDeps();
+    const provider = new ScriptedProvider(successEvents());
+    const failing = new Error('IndexedDB recusou');
+    const settings = {
+      saveLastModel: () => Promise.reject(failing),
+      saveLastEffort: () => Promise.reject(failing),
+    };
+
+    const result = await sendMessage(
+      { ...deps, settings, provider },
+      { conversationId: 'c1', text: 'Pergunta', model: testModel, effort: 'low', signal: new AbortController().signal },
+    );
+
+    expect(result.message.status).toBe('complete');
+    expect(result.persistError).toBeNull();
   });
 
   it('marca interrupted e preserva o texto parcial quando a pessoa para', async () => {
@@ -94,7 +148,7 @@ describe('sendMessage', () => {
           if (textOf(message) === 'parcial') signalFirstDelta();
         },
       },
-      { conversationId: 'c1', text: 'Pergunta', model: testModel, signal: controller.signal },
+      { conversationId: 'c1', text: 'Pergunta', model: testModel, effort: 'low', signal: controller.signal },
     );
 
     await firstDelta;
@@ -117,7 +171,7 @@ describe('sendMessage', () => {
 
     const result = await sendMessage(
       { ...deps, provider },
-      { conversationId: 'c1', text: 'Pergunta', model: testModel, signal: new AbortController().signal },
+      { conversationId: 'c1', text: 'Pergunta', model: testModel, effort: 'low', signal: new AbortController().signal },
     );
 
     expect(result.message.status).toBe('failed');
@@ -134,7 +188,7 @@ describe('sendMessage', () => {
 
     const result = await sendMessage(
       { ...deps, provider },
-      { conversationId: 'c1', text: 'Pergunta', model: testModel, signal: new AbortController().signal },
+      { conversationId: 'c1', text: 'Pergunta', model: testModel, effort: 'low', signal: new AbortController().signal },
     );
 
     expect(result.message.status).toBe('complete');
@@ -164,7 +218,7 @@ describe('sendMessage', () => {
 
     const result = await sendMessage(
       { ...deps, provider },
-      { conversationId: 'c1', text: 'Pergunta', model: testModel, signal: new AbortController().signal },
+      { conversationId: 'c1', text: 'Pergunta', model: testModel, effort: 'low', signal: new AbortController().signal },
     );
 
     expect(result.message.status).toBe('complete');
@@ -188,7 +242,7 @@ describe('sendMessage', () => {
 
     const result = await sendMessage(
       { ...deps, provider },
-      { conversationId: 'c1', text: 'Pergunta', model: testModel, signal: new AbortController().signal },
+      { conversationId: 'c1', text: 'Pergunta', model: testModel, effort: 'low', signal: new AbortController().signal },
     );
 
     expect(result.message).toMatchObject({
@@ -203,7 +257,7 @@ describe('sendMessage', () => {
     const { deps, clock } = await baseDeps();
     const first = await sendMessage(
       { ...deps, provider: new ScriptedProvider(successEvents()) },
-      { conversationId: 'c1', text: 'Pergunta', model: testModel, signal: new AbortController().signal },
+      { conversationId: 'c1', text: 'Pergunta', model: testModel, effort: 'low', signal: new AbortController().signal },
     );
 
     clock.set(90_000);
@@ -218,6 +272,7 @@ describe('sendMessage', () => {
         conversationId: 'c1',
         messageId: first.message.id,
         model: testModel,
+        effort: 'low',
         signal: new AbortController().signal,
       },
     );
@@ -241,7 +296,7 @@ describe('sendMessage', () => {
 
     const first = await sendMessage(
       { ...deps, provider },
-      { conversationId: 'c1', text: 'Pergunta', model: testModel, signal: new AbortController().signal },
+      { conversationId: 'c1', text: 'Pergunta', model: testModel, effort: 'low', signal: new AbortController().signal },
     );
 
     failing = false;
@@ -252,6 +307,7 @@ describe('sendMessage', () => {
         conversationId: 'c1',
         messageId: first.message.id,
         model: testModel,
+        effort: 'low',
         signal: new AbortController().signal,
       },
     );
@@ -274,7 +330,7 @@ describe('sendMessage', () => {
     const { store, deps } = await baseDeps();
     const first = await sendMessage(
       { ...deps, provider: new ScriptedProvider(successEvents()) },
-      { conversationId: 'c1', text: 'Pergunta', model: testModel, signal: new AbortController().signal },
+      { conversationId: 'c1', text: 'Pergunta', model: testModel, effort: 'low', signal: new AbortController().signal },
     );
 
     const other = { ...testModel, id: 'claude-outro' };
@@ -288,6 +344,7 @@ describe('sendMessage', () => {
         conversationId: 'c1',
         messageId: first.message.id,
         model: other,
+        effort: 'low',
         signal: new AbortController().signal,
       },
     );

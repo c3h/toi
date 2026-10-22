@@ -69,17 +69,20 @@ describe('DexieConversationStore: fronteira da Chave', () => {
       });
     }));
 
-  it('DexieSettingsStore guarda o cache de Modelos e o último Modelo', () =>
+  it('DexieSettingsStore guarda o cache de Modelos, o último Modelo e o último Esforço', () =>
     withDb(async (db) => {
       const settings = new DexieSettingsStore(db);
       expect(await settings.models('anthropic')).toBeNull();
       expect(await settings.lastModel()).toBeNull();
+      expect(await settings.lastEffort()).toBeNull();
 
       await settings.saveModels('anthropic', [testModel]);
       await settings.saveLastModel({ provider: 'anthropic', id: testModel.id });
+      await settings.saveLastEffort('max');
 
       expect(await settings.models('anthropic')).toEqual([testModel]);
       expect(await settings.lastModel()).toEqual({ provider: 'anthropic', id: testModel.id });
+      expect(await settings.lastEffort()).toBe('max');
     }));
 
   it('DexieSettingsStore guarda o que o seletor oferece', () =>

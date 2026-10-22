@@ -1,7 +1,7 @@
 import type { Conversation } from '../src/domain/conversation';
 import { appError } from '../src/domain/error';
 import type { Message } from '../src/domain/message';
-import type { Model, ModelPicks, ModelRef } from '../src/domain/model';
+import type { Effort, Model, ModelPicks, ModelRef } from '../src/domain/model';
 import type { ProviderId } from '../src/domain/ids';
 import type { StreamEvent } from '../src/domain/stream';
 import { emptyUsage } from '../src/domain/usage';
@@ -73,6 +73,7 @@ export const makeMessage = (
   firstTokenAt: null,
   provider: overrides.role === 'assistant' ? 'anthropic' : null,
   model: null,
+  effort: null,
   usage: null,
   stopReason: null,
   error: null,
@@ -87,6 +88,7 @@ export const makeConversation = (
   title: 'Nova conversa',
   provider: testModel.provider,
   model: testModel.id,
+  effort: 'low',
   createdAt: 1,
   updatedAt: 1,
   ...overrides,
@@ -239,6 +241,14 @@ export class MemorySettingsStore implements SettingsStore {
     this.values.set('lastModel', model);
   }
 
+  async lastEffort(): Promise<Effort | null> {
+    return (this.values.get('lastEffort') as Effort | undefined) ?? null;
+  }
+
+  async saveLastEffort(effort: Effort): Promise<void> {
+    this.values.set('lastEffort', effort);
+  }
+
   async modelPicks(): Promise<ModelPicks | null> {
     return (this.values.get('modelPicks') as ModelPicks | undefined) ?? null;
   }
@@ -342,6 +352,7 @@ export const gatedProvider = () => {
 
 interface BuiltDeps {
   store: MemoryStore;
+  settings: MemorySettingsStore;
   deps: Omit<FlowDeps, 'provider'>;
   clock: ReturnType<typeof fixedClock>;
 }
@@ -349,13 +360,16 @@ interface BuiltDeps {
 /** `FlowDeps` sem Provedor, com locks que simulam outra aba; não grava nada. */
 export const flowDeps = (store = new MemoryStore()): BuiltDeps => {
   const clock = fixedClock(50_000);
+  const settings = new MemorySettingsStore();
   let next = 0;
 
   return {
     store,
+    settings,
     clock,
     deps: {
       store,
+      settings,
       clock,
       estimator: { estimate: () => 1 },
       newId: () => `id-${(next += 1)}`,

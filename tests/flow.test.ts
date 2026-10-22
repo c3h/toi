@@ -18,7 +18,7 @@ describe('createFlow', () => {
     const { provider, delta } = gatedProvider();
     const flow = createFlow({ ...deps, provider: () => provider });
 
-    const pending = flow.send({ conversationId: 'c1', text: 'Pergunta', model: testModel });
+    const pending = flow.send({ conversationId: 'c1', text: 'Pergunta', model: testModel, effort: 'low' });
 
     await delta;
     expect(flow.active()).toBe('c1');
@@ -42,7 +42,7 @@ describe('createFlow', () => {
     const { provider, delta } = gatedProvider();
     const flow = createFlow({ ...deps, provider: () => provider });
 
-    const pending = flow.send({ conversationId: 'c1', text: 'Pergunta', model: testModel });
+    const pending = flow.send({ conversationId: 'c1', text: 'Pergunta', model: testModel, effort: 'low' });
     await delta;
     await flow.stop();
 
@@ -56,10 +56,10 @@ describe('createFlow', () => {
     const { provider, delta } = gatedProvider();
     const flow = createFlow({ ...deps, provider: () => provider });
 
-    const first = flow.send({ conversationId: 'c1', text: 'Pergunta', model: testModel });
+    const first = flow.send({ conversationId: 'c1', text: 'Pergunta', model: testModel, effort: 'low' });
 
     await expect(
-      flow.send({ conversationId: 'c1', text: 'Outra', model: testModel }),
+      flow.send({ conversationId: 'c1', text: 'Outra', model: testModel, effort: 'low' }),
     ).rejects.toMatchObject({ code: 'flow_busy' });
 
     await delta;
@@ -86,6 +86,7 @@ describe('createFlow', () => {
       conversationId: 'c1',
       text: 'Pergunta',
       model: testModel,
+      effort: 'low',
     });
 
     expect(first.message.status).toBe('failed');
@@ -96,6 +97,7 @@ describe('createFlow', () => {
       conversationId: 'c1',
       messageId: first.message.id,
       model: testModel,
+      effort: 'low',
     });
 
     expect(retried.message.id).toBe(first.message.id);
@@ -108,7 +110,7 @@ describe('createFlow', () => {
     const provider = new ScriptedProvider(replyEvents());
     const flow = createFlow({ ...deps, provider: () => provider });
 
-    const pending = flow.send({ conversationId: 'c1', text: 'Pergunta', model: testModel });
+    const pending = flow.send({ conversationId: 'c1', text: 'Pergunta', model: testModel, effort: 'low' });
     await flow.stop();
 
     const result = await pending;
@@ -122,7 +124,7 @@ describe('createFlow', () => {
     const flow = createFlow({ ...deps, provider: () => null });
 
     await expect(
-      flow.send({ conversationId: 'c1', text: 'Pergunta', model: testModel }),
+      flow.send({ conversationId: 'c1', text: 'Pergunta', model: testModel, effort: 'low' }),
     ).rejects.toMatchObject({ code: 'not_connected' });
     expect(flow.active()).toBeNull();
   });
@@ -141,13 +143,13 @@ describe('createFlow', () => {
     );
 
     await expect(
-      flow.send({ conversationId: 'c1', text: 'Pergunta', model: testModel }),
+      flow.send({ conversationId: 'c1', text: 'Pergunta', model: testModel, effort: 'low' }),
     ).rejects.toMatchObject({ code: 'flow_busy' });
 
     release();
     await task;
 
-    const result = await flow.send({ conversationId: 'c1', text: 'Pergunta', model: testModel });
+    const result = await flow.send({ conversationId: 'c1', text: 'Pergunta', model: testModel, effort: 'low' });
     expect(result.message.status).toBe('complete');
   });
 
@@ -156,7 +158,7 @@ describe('createFlow', () => {
     const { provider, delta } = gatedProvider();
     const flow = createFlow({ ...deps, provider: () => provider });
 
-    const pending = flow.send({ conversationId: 'c1', text: 'Pergunta', model: testModel });
+    const pending = flow.send({ conversationId: 'c1', text: 'Pergunta', model: testModel, effort: 'low' });
     await delta;
 
     await flow.exclusive(async () => undefined, 'c2');
@@ -172,11 +174,11 @@ describe('createFlow', () => {
     const tabA = createFlow({ ...deps, provider: () => provider });
     const tabB = createFlow({ ...deps, provider: () => provider });
 
-    const pending = tabA.send({ conversationId: 'c1', text: 'Pergunta', model: testModel });
+    const pending = tabA.send({ conversationId: 'c1', text: 'Pergunta', model: testModel, effort: 'low' });
     await delta;
 
     await expect(
-      tabB.send({ conversationId: 'c1', text: 'Outra', model: testModel }),
+      tabB.send({ conversationId: 'c1', text: 'Outra', model: testModel, effort: 'low' }),
     ).rejects.toMatchObject({ code: 'flow_busy' });
     expect(tabB.active()).toBeNull();
 
@@ -189,8 +191,8 @@ describe('createFlow', () => {
     const tabA = createFlow({ ...deps, provider: () => new ScriptedProvider(replyEvents()) });
     const tabB = createFlow({ ...deps, provider: () => new ScriptedProvider(replyEvents()) });
 
-    await tabA.send({ conversationId: 'c1', text: 'Primeira', model: testModel });
-    const second = await tabB.send({ conversationId: 'c1', text: 'Segunda', model: testModel });
+    await tabA.send({ conversationId: 'c1', text: 'Primeira', model: testModel, effort: 'low' });
+    const second = await tabB.send({ conversationId: 'c1', text: 'Segunda', model: testModel, effort: 'low' });
 
     expect(second.message.status).toBe('complete');
     expect((await store.listMessages('c1')).map((message) => message.seq)).toEqual([1, 2, 3, 4]);

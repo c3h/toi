@@ -15,14 +15,16 @@ describe('exportHistory', () => {
         status: 'streaming',
         parts: [{ type: 'text', text: 'parcial' }],
         firstTokenAt: 1_200,
+        effort: 'max',
       }),
     );
 
     const exported = await exportHistory({ store, clock: fixedClock(5) });
     const message = exported.conversations[0]?.messages[0];
 
-    expect(exported.conversations[0]).toMatchObject({ provider: 'anthropic' });
+    expect(exported.conversations[0]).toMatchObject({ provider: 'anthropic', effort: 'low' });
     expect(message?.provider).toBe('anthropic');
+    expect(message?.effort).toBe('max');
     expect(message?.firstTokenAt).toBe(1_200);
     expect(message?.status).toBe('interrupted');
     expect(message?.parts).toEqual([{ type: 'text', text: 'parcial' }]);

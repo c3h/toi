@@ -184,6 +184,7 @@ export const describeConversationStore = (
           completedAt: 20,
           firstTokenAt: 12,
           model: 'claude-test',
+          effort: 'xhigh',
           usage: {
             inputTokens: 1,
             outputTokens: 2,

@@ -5,7 +5,7 @@ import { toAnthropicPayload } from '../src/adapters/protocols/anthropic-messages
 import { collect, sse, streamOf } from './helpers';
 
 describe('AnthropicProvider', () => {
-  it('monta o POST com headers obrigatórios e payload de texto', async () => {
+  it('monta o POST com headers obrigatórios, Esforço e payload de texto', async () => {
     let captured: { url: string; init: RequestInit | undefined } | null = null;
 
     const fetchImpl: FetchLike = async (input, init) => {
@@ -23,6 +23,7 @@ describe('AnthropicProvider', () => {
         {
           model: 'claude-test',
           maxTokens: 128,
+          effort: 'low',
           messages: [{ role: 'user', parts: [{ type: 'text', text: 'oi' }] }],
         },
         new AbortController().signal,
@@ -43,15 +44,17 @@ describe('AnthropicProvider', () => {
       model: 'claude-test',
       max_tokens: 128,
       stream: true,
+      output_config: { effort: 'low' },
       messages: [{ role: 'user', content: [{ type: 'text', text: 'oi' }] }],
     });
   });
 
-  it('mapeia system e raciocínio para o formato da Anthropic', () => {
+  it('mapeia system, Esforço e raciocínio para o formato da Anthropic', () => {
     expect(
       toAnthropicPayload({
         model: 'claude-test',
         maxTokens: 128,
+        effort: 'xhigh',
         system: 'Seja breve.',
         messages: [
           { role: 'user', parts: [{ type: 'text', text: 'oi' }] },
@@ -69,6 +72,7 @@ describe('AnthropicProvider', () => {
       max_tokens: 128,
       stream: true,
       system: 'Seja breve.',
+      output_config: { effort: 'xhigh' },
       messages: [
         { role: 'user', content: [{ type: 'text', text: 'oi' }] },
         {

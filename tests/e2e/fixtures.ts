@@ -43,6 +43,16 @@ const installMock = () => {
               created_at: '2026-01-01T00:00:00Z',
               max_tokens: 8192,
               max_input_tokens: 200000,
+              capabilities: {
+                effort: {
+                  supported: true,
+                  low: { supported: true },
+                  medium: { supported: true },
+                  high: { supported: true },
+                  xhigh: { supported: true },
+                  max: { supported: true },
+                },
+              },
             },
           ],
           has_more: false,

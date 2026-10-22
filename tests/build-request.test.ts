@@ -38,6 +38,7 @@ describe('buildRequest', () => {
         message('4', 4, 'user', 'd'),
       ],
       model: model(),
+      effort: 'low',
       estimator,
     });
 
@@ -57,6 +58,7 @@ describe('buildRequest', () => {
         message('3', 3, 'assistant', 'final'),
       ],
       model: model(),
+      effort: 'low',
       estimator,
     });
 
@@ -68,6 +70,7 @@ describe('buildRequest', () => {
       buildRequest({
         messages: [message('1', 1, 'assistant', 'sem pergunta')],
         model: model(),
+        effort: 'low',
         estimator,
       }),
     ).toThrow(/terminar com uma Mensagem do user/);
@@ -77,6 +80,7 @@ describe('buildRequest', () => {
     const high = buildRequest({
       messages: [message('1', 1, 'user', 'oi')],
       model: model({ maxTokens: 100_000 }),
+      effort: 'low',
       estimator,
     });
     expect(high.request.maxTokens).toBe(8_192);
@@ -84,6 +88,7 @@ describe('buildRequest', () => {
     const low = buildRequest({
       messages: [message('1', 1, 'user', 'oi')],
       model: model({ maxTokens: 4_096 }),
+      effort: 'low',
       estimator,
     });
     expect(low.request.maxTokens).toBe(4_096);
@@ -99,6 +104,7 @@ describe('buildRequest', () => {
         message('5', 5, 'user', 'e'.repeat(10)),
       ],
       model: model({ maxInputTokens: 40 }),
+      effort: 'low',
       estimator,
     });
 
@@ -114,6 +120,7 @@ describe('buildRequest', () => {
     const { truncated } = buildRequest({
       messages: [message('1', 1, 'user', 'oi')],
       model: model(),
+      effort: 'low',
       estimator,
     });
 
@@ -134,6 +141,7 @@ describe('buildRequest', () => {
         makeMessage({ id: '3', conversationId, seq: 3, role: 'user', parts: [text('mais')] }),
       ],
       model: model(),
+      effort: 'low',
       estimator,
     });
 

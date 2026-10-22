@@ -39,7 +39,7 @@ describe('createToi', () => {
 
     expect(toi.connected()).toBe(false);
     await expect(
-      toi.flow.send({ conversationId: 'c1', text: 'Pergunta', model: testModel }),
+      toi.flow.send({ conversationId: 'c1', text: 'Pergunta', model: testModel, effort: 'low' }),
     ).rejects.toMatchObject({ code: 'not_connected' });
   });
 
@@ -85,7 +85,7 @@ describe('createToi', () => {
     const { deps } = await setup();
     const toi = await createToi(deps);
 
-    const conversation = await toi.createConversation(testModel);
+    const conversation = await toi.createConversation(testModel, 'low');
     expect(conversation.title).toBe('Nova conversa');
     expect(await toi.listConversations()).toEqual([conversation]);
     expect(await toi.listMessages(conversation.id)).toEqual([]);
@@ -130,7 +130,7 @@ describe('createToi', () => {
 
     const toi = await createToi({ ...deps, providers: providersOf(() => provider) });
 
-    const pending = toi.flow.send({ conversationId: 'c1', text: 'Pergunta', model: testModel });
+    const pending = toi.flow.send({ conversationId: 'c1', text: 'Pergunta', model: testModel, effort: 'low' });
     await delta;
 
     await toi.eraseConversations();
@@ -183,7 +183,7 @@ describe('createToi', () => {
     const { provider, delta } = gatedProvider();
     const toi = await createToi({ ...deps, providers: providersOf(() => provider) });
 
-    const pending = toi.flow.send({ conversationId: 'c1', text: 'Pergunta', model: testModel });
+    const pending = toi.flow.send({ conversationId: 'c1', text: 'Pergunta', model: testModel, effort: 'low' });
     await delta;
 
     await toi.deleteConversation('c2');
@@ -203,7 +203,7 @@ describe('createToi', () => {
     const { provider, delta } = gatedProvider();
     const toi = await createToi({ ...deps, providers: providersOf(() => provider) });
 
-    const pending = toi.flow.send({ conversationId: 'c1', text: 'Pergunta', model: testModel });
+    const pending = toi.flow.send({ conversationId: 'c1', text: 'Pergunta', model: testModel, effort: 'low' });
     await delta;
 
     await toi.deleteConversation('c1');
@@ -233,7 +233,7 @@ describe('createToi', () => {
     const erasing = toi.eraseAll();
 
     await expect(
-      toi.flow.send({ conversationId: 'c1', text: 'Pergunta', model: testModel }),
+      toi.flow.send({ conversationId: 'c1', text: 'Pergunta', model: testModel, effort: 'low' }),
     ).rejects.toMatchObject({ code: 'flow_busy' });
 
     store.release();
@@ -241,7 +241,7 @@ describe('createToi', () => {
 
     expect(await store.listMessages('c1')).toEqual([]);
     await expect(
-      toi.flow.send({ conversationId: 'c1', text: 'Pergunta', model: testModel }),
+      toi.flow.send({ conversationId: 'c1', text: 'Pergunta', model: testModel, effort: 'low' }),
     ).rejects.toMatchObject({ code: 'not_connected' });
   });
 
@@ -254,7 +254,7 @@ describe('createToi', () => {
     const tabA = await createToi({ ...deps, providers: providersOf(() => provider) });
     const tabB = await createToi(deps);
 
-    const pending = tabA.flow.send({ conversationId: 'c1', text: 'Pergunta', model: testModel });
+    const pending = tabA.flow.send({ conversationId: 'c1', text: 'Pergunta', model: testModel, effort: 'low' });
     await delta;
 
     await expect(tabB.eraseConversations()).rejects.toMatchObject({ code: 'flow_busy' });
@@ -277,7 +277,7 @@ describe('createToi', () => {
       ...deps,
       providers: providersOf(() => new ScriptedProvider(replyEvents())),
     });
-    await toi.flow.send({ conversationId: 'c1', text: 'Pergunta', model: testModel });
+    await toi.flow.send({ conversationId: 'c1', text: 'Pergunta', model: testModel, effort: 'low' });
 
     const exported = await toi.exportHistory();
 
@@ -304,7 +304,7 @@ describe('createToi', () => {
       providers: providersOf(() => provider),
     });
 
-    const pending = toi.flow.send({ conversationId: 'c1', text: 'Pergunta', model: testModel });
+    const pending = toi.flow.send({ conversationId: 'c1', text: 'Pergunta', model: testModel, effort: 'low' });
     await delta;
 
     await toi.eraseConversations();
@@ -340,6 +340,19 @@ describe('createToi', () => {
     expect(await toi.lastModel()).toEqual(outro);
   });
 
+  it('changeEffort troca o Esforço da Conversa sem reordenar e vira o default', async () => {
+    const { store, deps } = await setup();
+    await store.putConversation(makeConversation('c1', { updatedAt: 5 }));
+    const toi = await createToi(deps);
+
+    expect(await toi.lastEffort()).toBeNull();
+
+    const updated = await toi.changeEffort('c1', 'xhigh');
+
+    expect(updated).toMatchObject({ effort: 'xhigh', updatedAt: 5 });
+    expect(await toi.lastEffort()).toBe('xhigh');
+  });
+
   it('trocar Modelo e renomear durante o Fluxo não são desfeitos quando a resposta termina', async () => {
     const { store, credentials, deps } = await setup();
     await credentials.set('anthropic', 'sk-test');
@@ -355,7 +368,7 @@ describe('createToi', () => {
     });
     const toi = await createToi({ ...deps, providers: providersOf(() => provider) });
 
-    const pending = toi.flow.send({ conversationId: 'c1', text: 'Pergunta', model: testModel });
+    const pending = toi.flow.send({ conversationId: 'c1', text: 'Pergunta', model: testModel, effort: 'low' });
     await delta.promise;
     await toi.changeModel('c1', { provider: 'anthropic', id: 'claude-outro' });
     await toi.renameConversation('c1', 'Renomeada');
@@ -380,7 +393,7 @@ describe('createToi', () => {
     const seen: Array<[string, string]> = [];
     const unsubscribe = toi.subscribe((message) => seen.push([message.role, message.status]));
 
-    await toi.flow.send({ conversationId: 'c1', text: 'Pergunta', model: testModel });
+    await toi.flow.send({ conversationId: 'c1', text: 'Pergunta', model: testModel, effort: 'low' });
 
     expect(seen[0]).toEqual(['user', 'complete']);
     expect(seen[1]).toEqual(['assistant', 'streaming']);
@@ -388,7 +401,7 @@ describe('createToi', () => {
 
     unsubscribe();
     const count = seen.length;
-    await toi.flow.send({ conversationId: 'c1', text: 'Outra', model: testModel });
+    await toi.flow.send({ conversationId: 'c1', text: 'Outra', model: testModel, effort: 'low' });
     expect(seen).toHaveLength(count);
   });
 });
