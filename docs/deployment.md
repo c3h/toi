@@ -17,8 +17,13 @@ e as dependências são instaladas pelo lockfile com `npm ci`.
 A branch `main` exige o check `check` antes do merge. Em pushes para ela, ou
 execuções manuais do workflow nessa branch, o CI guarda `dist` como artefato
 `site`. O job `deploy` só começa depois do gate e publica esse mesmo artefato
-com `npm run deploy`. Ao final, confere HTTPS, o HTML publicado contra o build,
-a CSP e a ausência de relatórios de rede. Uma nova execução de produção espera
+com `npm run deploy`. Ao final, tenta conferir HTTPS, o HTML publicado contra o
+build, a CSP e a ausência de relatórios de rede. Se o Cloudflare responder com
+403 e `cf-mitigated: challenge`, o upload permanece concluído e o workflow
+registra um aviso de conferência HTTP pendente. O Bot Fight Mode da zona
+desafia alguns runners; a proteção permanece ativa. Nesse caso, confira a URL
+em um navegador. Qualquer outra resposta inesperada ou divergência falha o job.
+Uma nova execução de produção espera
 a anterior terminar; atualizar um pull request cancela seu CI anterior.
 
 O ambiente GitHub `production` aceita somente branches protegidas; `main` é
