@@ -2,6 +2,7 @@ import { Menu } from 'lucide-react';
 import { lazy, Suspense, useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
 import type { RunResult } from '../app/send-message';
 import type { Toi } from '../app/toi';
+import type { AttachmentUpload } from '../domain/attachment';
 import type { Conversation } from '../domain/conversation';
 import type { ConversationId } from '../domain/ids';
 import type { Message } from '../domain/message';
@@ -40,7 +41,7 @@ const Blocked = ({ message, children }: { message: string; children: ReactNode }
 
 const noticeFrom = (result: RunResult): Notice | null => {
   if (result.persistError) return { kind: 'not_saved' };
-  if (result.truncated) return { kind: 'truncated' };
+  if (result.truncated) return { kind: 'truncated', truncation: result.truncated };
   return null;
 };
 
@@ -168,7 +169,7 @@ export const App = ({ toi }: { toi: Toi }) => {
     }
   };
 
-  const send = async (text: string): Promise<boolean> => {
+  const send = async (text: string, attachments: AttachmentUpload[]): Promise<boolean> => {
     if (!model) return false;
 
     let target = conversation;
@@ -191,7 +192,7 @@ export const App = ({ toi }: { toi: Toi }) => {
 
     const id = target.id;
     remember(model, effort);
-    return run(id, () => toi.flow.send({ conversationId: id, text, model, effort }));
+    return run(id, () => toi.flow.send({ conversationId: id, text, attachments, model, effort }));
   };
 
   const retry = (message: Message) => {
@@ -237,6 +238,7 @@ export const App = ({ toi }: { toi: Toi }) => {
         };
       case 'context_overflow':
       case 'request_too_large':
+      case 'attachment_rejected':
         return { label: 'nova conversa', run: newConversation };
       default:
         return null;

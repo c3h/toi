@@ -2,6 +2,7 @@ import {
   ArrowDown,
   ArrowUp,
   Hash,
+  Paperclip,
   RotateCcw,
   Square,
   Timer,
@@ -22,11 +23,16 @@ import {
   type KeyboardEvent,
   type Ref,
 } from 'react';
+import type { Truncation } from '../app/build-request';
 import type { ProviderInfo, Toi } from '../app/toi';
+import type { AttachmentUpload } from '../domain/attachment';
 import { messageFor, type AppErrorInfo } from '../domain/error';
 import type { ConversationId } from '../domain/ids';
-import { finalUsageOf, textOf, timingOf, type Message } from '../domain/message';
+import { attachmentsOf, finalUsageOf, textOf, timingOf, type Message } from '../domain/message';
 import { findModel, refFrom, type Effort, type Model } from '../domain/model';
+import { DraftAttachments, MessageAttachments } from './attachments/Attachments';
+import { useDraftAttachments } from './attachments/use-draft-attachments';
+import { useFileIntake } from './attachments/use-file-intake';
 import { CopyButton } from './CopyButton';
 import { EffortPicker, effortLabel } from './EffortPicker';
 import { ModelPicker } from './ModelPicker';
@@ -36,7 +42,9 @@ import { useMessages } from './use-messages';
 import { useReveal } from './use-reveal';
 
 export type Notice =
-  { kind: 'error'; error: AppErrorInfo } | { kind: 'truncated' } | { kind: 'not_saved' };
+  | { kind: 'error'; error: AppErrorInfo }
+  | { kind: 'truncated'; truncation: Truncation }
+  | { kind: 'not_saved' };
 
 export interface NoticeAction {
   label: string;
@@ -64,15 +72,32 @@ interface ChatProps {
   onModelChange: (model: Model) => void;
   onEffortChange: (effort: Effort) => void;
   onManageModels: () => void;
-  onSend: (text: string) => Promise<boolean>;
+  /** `false` quando o envio não foi aceito: o rascunho e os Anexos voltam ao composer. */
+  onSend: (text: string, attachments: AttachmentUpload[]) => Promise<boolean>;
   onStop: () => void;
   onRetry: (message: Message) => void;
   onDismissNotice: () => void;
 }
 
-const NOTICE_TEXT: Record<Exclude<Notice['kind'], 'error'>, string> = {
-  truncated: 'parte do meio da conversa ficou fora do contexto para caber no modelo.',
-  not_saved: 'a resposta chegou, mas não foi salva no navegador.',
+const truncationText = ({ turns, attachments }: Truncation): string => {
+  const what =
+    turns && attachments
+      ? 'anexos antigos e parte do meio da conversa ficaram'
+      : attachments
+        ? 'anexos antigos ficaram'
+        : 'parte do meio da conversa ficou';
+  return `${what} fora do contexto para caber no modelo.`;
+};
+
+const noticeText = (notice: Notice): string => {
+  switch (notice.kind) {
+    case 'error':
+      return lower(notice.error.message);
+    case 'truncated':
+      return truncationText(notice.truncation);
+    case 'not_saved':
+      return 'a resposta chegou, mas não foi salva no navegador.';
+  }
 };
 
 const modelName = (message: Message, models: Model[]): string | null => {
@@ -118,6 +143,7 @@ const statsOf = (message: Message): Stat[] => {
 };
 
 interface MessageViewProps {
+  toi: Toi;
   message: Message;
   models: Model[];
   retryable: boolean;
@@ -127,14 +153,18 @@ interface MessageViewProps {
 const MessageView = memo((props: MessageViewProps) => {
   if (props.message.role === 'assistant') return <Reply {...props} />;
 
+  const text = textOf(props.message);
+  const attachments = attachmentsOf(props.message);
+
   return (
     <article className="flex gap-3 text-base text-text">
       <span className="select-none text-accent" aria-hidden="true">
         &gt;
       </span>
-      <p className="min-w-0 whitespace-pre-wrap [overflow-wrap:anywhere]">
-        {textOf(props.message)}
-      </p>
+      <div className="flex min-w-0 flex-col gap-3">
+        {attachments.length > 0 && <MessageAttachments toi={props.toi} attachments={attachments} />}
+        {text && <p className="whitespace-pre-wrap [overflow-wrap:anywhere]">{text}</p>}
+      </div>
     </article>
   );
 });
@@ -225,6 +255,8 @@ export const Chat = ({
   // As Mensagens mudam a cada frame do Fluxo; morando aqui, só o Chat re-renderiza.
   const messages = useMessages(toi, conversationId);
   const [draft, setDraft] = useState('');
+  const attachments = useDraftAttachments();
+  const picker = useRef<HTMLInputElement>(null);
   const scroller = useRef<HTMLDivElement>(null);
   const following = useRef(true);
   const [atBottom, setAtBottom] = useState(true);
@@ -260,15 +292,30 @@ export const Chat = ({
   // Depois do `stop_reason` a resposta já acabou; só falta o corpo fechar.
   const finishing = running && last?.role === 'assistant' && last.stopReason !== null;
 
+  const sendable =
+    !running && !attachments.blocked && (draft.trim() !== '' || attachments.items.length > 0);
+
   const submit = async () => {
+    if (!sendable) return;
     const text = draft.trim();
-    if (!text || running) return;
 
     following.current = true;
     setDraft('');
-    const accepted = await onSend(text);
-    if (!accepted) setDraft((current) => current || text);
+    const taken = attachments.take();
+    const accepted = await onSend(text, taken);
+    if (!accepted) {
+      setDraft((current) => current || text);
+      attachments.restore(taken);
+    }
   };
+
+  const attach = (files: File[]) => {
+    if (running || files.length === 0) return;
+    attachments.add(files);
+    input.current?.focus();
+  };
+
+  const intake = useFileIntake(!running, attach);
 
   const onKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
     if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing) {
@@ -278,7 +325,12 @@ export const Chat = ({
   };
 
   return (
-    <section className="flex min-h-0 flex-1 flex-col">
+    <section className="relative flex min-h-0 flex-1 flex-col" {...intake.dropProps}>
+      {intake.dragging && (
+        <div className="pointer-events-none absolute inset-2 z-20 grid place-items-center border border-dashed border-accent bg-bg/85 text-base text-accent">
+          solte para anexar
+        </div>
+      )}
       <div
         ref={scroller}
         // `relative`: o que é absoluto dentro (como `sr-only`) rola aqui, não estica a página.
@@ -316,6 +368,7 @@ export const Chat = ({
             {messages.map((message) => (
               <MessageView
                 key={message.id}
+                toi={toi}
                 message={message}
                 models={models}
                 retryable={canRetry && message === last}
@@ -349,7 +402,7 @@ export const Chat = ({
           >
             <span className={notice.kind === 'error' ? 'text-danger' : 'text-accent'}>*</span>
             <span className={`flex-1 ${notice.kind === 'error' ? 'text-text' : 'text-muted'}`}>
-              {notice.kind === 'error' ? lower(notice.error.message) : NOTICE_TEXT[notice.kind]}
+              {noticeText(notice)}
             </span>
             {noticeAction && (
               <button
@@ -382,6 +435,9 @@ export const Chat = ({
             if (event.target === event.currentTarget) input.current?.focus();
           }}
         >
+          {attachments.items.length > 0 && (
+            <DraftAttachments items={attachments.items} onRemove={attachments.remove} />
+          )}
           <label className="sr-only" htmlFor="composer-input">
             mensagem
           </label>
@@ -394,12 +450,34 @@ export const Chat = ({
             disabled={running}
             onChange={(event) => setDraft(event.target.value)}
             onKeyDown={onKeyDown}
+            onPaste={intake.onPaste}
             autoFocus
             className="block max-h-[40vh] w-full resize-none bg-transparent px-4 pt-3.5 pb-1 text-base text-text outline-none placeholder:text-subtle disabled:opacity-60"
           />
           <div className="flex items-center justify-between gap-3 py-2 pr-2 pl-2.5">
             {model ? (
               <div className="flex min-w-0 items-center gap-1">
+                <button
+                  type="button"
+                  aria-label="anexar arquivos"
+                  title="anexar imagem, pdf ou texto"
+                  disabled={running}
+                  className="grid size-7 flex-none place-items-center text-subtle transition-colors hover:text-text disabled:opacity-60 disabled:hover:text-subtle"
+                  onClick={() => picker.current?.click()}
+                >
+                  <Paperclip size={14} aria-hidden />
+                </button>
+                <input
+                  ref={picker}
+                  type="file"
+                  multiple
+                  hidden
+                  onChange={(event) => {
+                    attach([...(event.target.files ?? [])]);
+                    // Escolher o mesmo arquivo de novo precisa disparar `change`.
+                    event.target.value = '';
+                  }}
+                />
                 <ModelPicker
                   options={modelOptions}
                   model={model}
@@ -431,7 +509,7 @@ export const Chat = ({
                 type="submit"
                 aria-label="enviar"
                 title="enviar (enter)"
-                disabled={!draft.trim()}
+                disabled={!sendable}
                 className="grid size-7 flex-none place-items-center bg-accent text-bg transition-colors hover:bg-accent-2 disabled:bg-line disabled:text-subtle"
               >
                 <ArrowUp size={15} strokeWidth={2.25} aria-hidden />

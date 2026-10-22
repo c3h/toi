@@ -2,7 +2,7 @@ import { useEffect, useRef, useState, type ReactNode, type Ref } from 'react';
 import type { ProviderInfo, Toi } from '../app/toi';
 import type { AppErrorInfo } from '../domain/error';
 import { modelFamilies, togglePick, type Model, type ModelPicks } from '../domain/model';
-import { downloadJson, errorInfo, lower, requestPersistence } from './support';
+import { download, errorInfo, lower, requestPersistence } from './support';
 import { readTheme, saveTheme, type ThemePref } from './theme';
 
 export type SettingsSection = 'top' | 'modelos';
@@ -203,7 +203,7 @@ export default function Settings({
   const exportHistory = () =>
     run(async () => {
       const date = new Date().toISOString().slice(0, 10);
-      downloadJson(`toi-historico-${date}.json`, await toi.exportHistory());
+      download(`toi-historico-${date}.json`, await toi.exportHistory());
     }, 'histórico exportado.');
 
   return (

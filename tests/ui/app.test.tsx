@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { userEvent } from 'vitest/browser';
 import { render } from 'vitest-browser-react';
 import { createToi } from '../../src/app/toi';
+import { appError } from '../../src/domain/error';
 import type { Model } from '../../src/domain/model';
 import type { ChatProvider } from '../../src/ports/chat-provider';
 import { App } from '../../src/ui/App';
@@ -20,15 +21,18 @@ import {
   ScriptedProvider,
 } from '../helpers';
 
-const mount = async (createProvider: (key: string) => ChatProvider) => {
+const mount = async (
+  createProvider: (key: string) => ChatProvider,
+  store = new MemoryStore(),
+) => {
   sessionStorage.clear();
   let next = 0;
   const toi = await createToi({
-    store: new MemoryStore(),
+    store,
     credentials: new MemoryCredentialStore(),
     settings: new MemorySettingsStore(),
     clock: { now: () => Date.now() },
-    estimator: { estimate: () => 1 },
+    estimator: { estimate: () => 1, estimateAttachment: () => 1 },
     newId: () => `id-${(next += 1)}`,
     locks: new MemoryLocks(),
     providers: providersOf(createProvider),
@@ -210,5 +214,85 @@ describe('App', () => {
     await expect
       .element(screen.getByRole('button', { name: 'modelo: claude opus 5.5' }))
       .toBeVisible();
+  });
+});
+
+type Screen = Awaited<ReturnType<typeof render>>;
+
+const filePicker = (screen: Screen): HTMLInputElement =>
+  screen.container.querySelector<HTMLInputElement>('input[type="file"]')!;
+
+const pngFile = async (name: string): Promise<File> => {
+  const canvas = new OffscreenCanvas(30, 20);
+  const context = canvas.getContext('2d')!;
+  context.fillStyle = '#c60';
+  context.fillRect(0, 0, 30, 20);
+  return new File([await canvas.convertToBlob({ type: 'image/png' })], name);
+};
+
+describe('App: Anexos', () => {
+  it('anexa pelo clipe, colando e soltando, e envia sem texto', async () => {
+    const provider = new ScriptedProvider(replyEvents());
+    const screen = await mount(() => provider);
+    await connect(screen);
+    const field = screen.getByLabelText('mensagem').element();
+
+    await userEvent.upload(filePicker(screen), new File(['# notas'], 'notas.md'));
+    const pasted = new DataTransfer();
+    pasted.items.add(await pngFile('tela.png'));
+    field.dispatchEvent(new ClipboardEvent('paste', { clipboardData: pasted, bubbles: true }));
+    const dropped = new DataTransfer();
+    dropped.items.add(new File(['a,b'], 'tabela.csv'));
+    field.dispatchEvent(new DragEvent('drop', { dataTransfer: dropped, bubbles: true }));
+
+    await expect.element(screen.getByText('30×20 · 1 kb')).toBeVisible();
+    await expect.element(screen.getByRole('button', { name: 'enviar' })).toBeEnabled();
+    await userEvent.click(screen.getByRole('button', { name: 'enviar' }));
+
+    await expect.element(screen.getByText('Olá')).toBeVisible();
+    await expect.element(screen.getByRole('button', { name: 'baixar notas.md' })).toBeVisible();
+    expect(provider.requests[0]?.messages[0]?.parts).toMatchObject([
+      { type: 'file', attachment: { kind: 'text', name: 'notas.md' } },
+      { type: 'file', attachment: { kind: 'image', mediaType: 'image/png' } },
+      { type: 'file', attachment: { kind: 'text', name: 'tabela.csv' } },
+    ]);
+    await expect
+      .element(screen.getByRole('button', { name: 'notas.md', exact: true }))
+      .toHaveAttribute('aria-current', 'page');
+  });
+
+  it('um arquivo recusado bloqueia o envio até sair do rascunho', async () => {
+    const screen = await mount(() => new ScriptedProvider(replyEvents()));
+    await connect(screen);
+
+    await userEvent.fill(screen.getByLabelText('mensagem'), 'veja');
+    await userEvent.upload(filePicker(screen), new File([new Uint8Array([0, 1, 2])], 'x.bin'));
+
+    await expect.element(screen.getByText('só imagem, pdf ou texto em utf-8')).toBeVisible();
+    await expect.element(screen.getByRole('button', { name: 'enviar' })).toBeDisabled();
+
+    await userEvent.click(screen.getByRole('button', { name: 'remover x.bin' }));
+    await expect.element(screen.getByRole('button', { name: 'enviar' })).toBeEnabled();
+  });
+
+  it('sem espaço no navegador, o texto e os anexos voltam ao composer', async () => {
+    class FullStore extends MemoryStore {
+      override async startTurn(): Promise<never> {
+        throw appError('storage_full');
+      }
+    }
+    const screen = await mount(() => new ScriptedProvider(replyEvents()), new FullStore());
+    await connect(screen);
+
+    await userEvent.upload(filePicker(screen), new File(['abc'], 'dados.csv'));
+    await expect.element(screen.getByText('1 kb')).toBeVisible();
+    await userEvent.fill(screen.getByLabelText('mensagem'), 'resuma');
+    await userEvent.keyboard('{Enter}');
+
+    await expect
+      .element(screen.getByRole('status'))
+      .toHaveTextContent('o navegador ficou sem espaço para salvar esta Mensagem.');
+    await expect.element(screen.getByLabelText('mensagem')).toHaveValue('resuma');
+    await expect.element(screen.getByRole('button', { name: 'remover dados.csv' })).toBeVisible();
   });
 });

@@ -42,13 +42,19 @@ const SECONDS = new Intl.NumberFormat('pt-BR', {
 
 export const formatTokens = (count: number): string => TOKENS.format(count);
 
+const BYTES = new Intl.NumberFormat('pt-BR', { maximumFractionDigits: 1 });
+
+/** "340 kb", "1,2 mb": em minúsculas, como o resto da UI. */
+export const formatBytes = (bytes: number): string =>
+  bytes < 1_000_000
+    ? `${BYTES.format(Math.max(1, Math.round(bytes / 1_000)))} kb`
+    : `${BYTES.format(bytes / 1_000_000)} mb`;
+
 /** Sempre com uma casa: "0,8 s", "1,0 s". */
 export const formatSeconds = (ms: number): string => SECONDS.format(ms / 1000);
 
-export const downloadJson = (name: string, value: unknown): void => {
-  const url = URL.createObjectURL(
-    new Blob([JSON.stringify(value, null, 2)], { type: 'application/json' }),
-  );
+export const download = (name: string, blob: Blob): void => {
+  const url = URL.createObjectURL(blob);
   const link = document.createElement('a');
   link.href = url;
   link.download = name;
