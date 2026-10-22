@@ -19,8 +19,12 @@ Uma fala de um papel — `user` ou `assistant` — dentro de uma Conversa. Cont�
 _Avoid_: Bolha, resposta (a resposta é uma Mensagem do assistant)
 
 **Parte**:
-Um bloco de conteúdo dentro de uma Mensagem. Na v1, texto é o único tipo produzido: a Mensagem do user nasce com uma Parte e a do assistant pode começar vazia e receber uma Parte durante o Fluxo. O schema já prevê `reasoning`.
+Um bloco de conteúdo dentro de uma Mensagem: `text`, `file` ou `reasoning`. A Mensagem do user nasce com os Anexos, um `file` cada, e o texto; a do assistant pode começar vazia e receber texto durante o Fluxo. O schema já prevê `reasoning`.
 _Avoid_: Bloco, chunk, conteúdo
+
+**Anexo**:
+Um arquivo — imagem, PDF ou texto — que a pessoa junta a uma Mensagem. É preparado e guardado no navegador; a Parte `file` guarda só os metadados, e os bytes vão inline a cada requisição que o inclui ([ADR 0009](docs/adr/0009-attachments-inline-local.md)).
+_Avoid_: Arquivo (em texto corrido), upload, documento
 
 **Estado da mensagem**:
 O ciclo de vida de uma Mensagem: `complete`, `streaming`, `interrupted` ou `failed`. A recuperação na abertura está em `docs/architecture.md` §4.
@@ -63,5 +67,5 @@ Um retrato do histórico Local num arquivo versionado, que nunca contém a Chave
 _Avoid_: Backup (backup é o uso que a pessoa faz do arquivo), dump
 
 **Título**:
-O nome curto de uma Conversa, derivado da primeira Mensagem do user.
+O nome curto de uma Conversa, derivado da primeira Mensagem do user: do texto ou, sem texto, do nome do primeiro Anexo.
 _Avoid_: Nome, assunto

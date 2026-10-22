@@ -11,6 +11,7 @@ Um chat que responde uma pergunta com um Modelo da Anthropic, com Fluxo, cancela
 - adicionar, validar, trocar e remover a Chave;
 - listar Modelos via `GET /v1/models` e escolher um, com o Esforço ao lado;
 - criar Conversa, enviar Mensagem, receber Fluxo, parar;
+- anexar imagens, PDFs e arquivos de texto a uma Mensagem, pelo clipe, colando ou soltando (§6);
 - renomear e apagar Conversas na barra lateral;
 - apagar todas as Conversas (preserva a Chave) e apagar tudo (remove a Chave);
 - persistir e retomar; Mensagem `streaming` órfã vira `interrupted` na abertura;
@@ -44,7 +45,8 @@ src/
     locks/       # web (navigator.locks)
     tokens/      # heuristic
   app/           # flow, toi, locks, connect, conversations, erase, export, send-message, build-request; sem React
-  ui/            # React + Tailwind: App, Onboarding, Sidebar, Chat, Prose, Settings (lazy), markdown/ (lazy)
+  ui/            # React + Tailwind: App, Onboarding, Sidebar, Chat, Prose, Settings (lazy), markdown/ (lazy),
+                 # attachments/ (rascunho, chips e diálogo; o preparo é lazy)
   main.tsx       # composition root: injeta os adaptadores concretos em `createToi`
 ```
 
@@ -59,8 +61,8 @@ As portas existem por fronteiras reais: `ChatProvider` isola o HTTP de terceiro 
 `Flow.send` (o caso de uso `startSendMessage`):
 
 1. segura os locks da Conversa (§4, Coordenação entre abas) até o passo 7; sem eles, `flow_busy`;
-2. grava a Mensagem do user (`complete`) e a do assistant (`streaming`);
-3. normaliza o histórico e monta o `ChatRequest` (`build-request`);
+2. grava numa transação (`startTurn`) a Mensagem do user (`complete`), a do assistant (`streaming`) e os bytes dos Anexos;
+3. normaliza e seleciona o histórico, busca no store só os Anexos que ficaram e monta o `ChatRequest` com os Blobs, que o adapter lê ao montar o corpo (`build-request`); parar durante a busca fecha em `interrupted` sem chamar o Provedor;
 4. consome `provider.stream(request, signal)`;
 5. para cada Evento aplicado, atualiza a Parte e agenda o flush (300 ms);
 6. fecha em `complete`, `interrupted` ou `failed`;
@@ -79,7 +81,7 @@ streaming ── finished ──► complete
 - Se o flush final falhar, a Mensagem continua `complete` em memória e `RunResult.persistError` carrega o erro; a UI avisa que a resposta não foi salva.
 - **Tentar de novo substitui a última Mensagem do assistant** (mesmo id, Partes limpas, estado `streaming`, `createdAt` e `firstTokenAt` reiniciados para o ritmo ser da nova tentativa). É a única mutação permitida numa Mensagem. Sem isso, a Conversa acumularia duas respostas para o mesmo pedido.
 - Enquanto há Fluxo, o composer fica desabilitado e só existe "parar". Isso elimina o caso de uma segunda Mensagem do user durante o Fluxo.
-- O construtor de requisição funde Mensagens consecutivas do mesmo papel, descarta Mensagens sem texto e assistant nas pontas, nunca envia uma Mensagem `streaming` e exige que a última seja do user.
+- O construtor de requisição funde Mensagens consecutivas do mesmo papel, descarta Mensagens sem texto nem Anexo e assistant nas pontas, nunca envia uma Mensagem `streaming` e exige que a última seja do user.
 
 ### Identidade e ordem
 
@@ -115,13 +117,16 @@ Regras do adaptador:
 | `ChatMessage.parts` | `messages[].content` como lista de blocos |
 | `Part` `text` | bloco `text` |
 | `Part` `reasoning` | bloco `thinking` com `signature` (o `build-request` da v1 não envia) |
+| `Part` `file` de imagem | bloco `image`, `source` base64 em PNG ou JPEG |
+| `Part` `file` de PDF | bloco `document`, `source` base64 `application/pdf`, nome em `title` |
+| `Part` `file` de texto | bloco `document`, `source` `text`, nome em `title` |
 | `ChatRequest.system` | `system`, só quando definido |
 | `ChatRequest.effort` | `output_config.effort`, sempre |
 | `delta` de texto | `content_block_delta` → `text_delta` |
 | `usage` | `message_start.usage` + `message_delta.usage` |
 | `stopReason` | `message_delta.delta.stop_reason` |
 
-A porta carrega Partes, não texto ([ADR 0003](adr/0003-message-as-parts-and-normalized-events.md)): raciocínio, imagem e ferramentas entram sem mudar o contrato. `system` existe na porta, mas a v1 não o preenche; system prompt é sempre campo próprio, nunca Mensagem. A porta não tem parâmetros de amostragem. O Esforço vai em todo envio: regula quanto o Modelo raciocina, mas o raciocínio continua oculto — nenhum `thinking` é pedido nem persistido (§1).
+A porta carrega Partes, não texto ([ADR 0003](adr/0003-message-as-parts-and-normalized-events.md)): os Anexos entraram como Partes novas, e raciocínio e ferramentas entram do mesmo jeito. Os Anexos vão na Mensagem do user antes do texto. `system` existe na porta, mas a v1 não o preenche; system prompt é sempre campo próprio, nunca Mensagem. A porta não tem parâmetros de amostragem. O Esforço vai em todo envio: regula quanto o Modelo raciocina, mas o raciocínio continua oculto — nenhum `thinking` é pedido nem persistido (§1).
 
 A Anthropic usa o Protocolo `anthropic-messages`; `anthropic-version` é do Protocolo, `x-api-key` e o header de acesso pelo navegador são do Provedor.
 
@@ -163,12 +168,13 @@ A lista fica em cache em `settings`, uma por Provedor (`toi.models()` junta as d
 
 ## 6. Persistência
 
-IndexedDB via Dexie. O schema está em `src/adapters/storage/db.ts`: `conversations` indexa `id` e `updatedAt`; `messages` indexa `id`, `conversationId`, `[conversationId+seq]` e `status`; `settings` indexa `key`; `credentials` indexa `provider`.
+IndexedDB via Dexie. O schema está em `src/adapters/storage/db.ts`: `conversations` indexa `id` e `updatedAt`; `messages` indexa `id`, `conversationId`, `[conversationId+seq]` e `status`; `attachments` indexa `id` e `conversationId`; `settings` indexa `key`; `credentials` indexa `provider`.
 
 | Store | Conteúdo | Nunca contém |
 |---|---|---|
 | `conversations` | id, título, Provedor, Modelo e Esforço, timestamps | Mensagens |
-| `messages` | id, conversationId, seq, papel, partes, estado, timestamps (incluindo o primeiro token), Provedor, Modelo e Esforço, uso, stopReason, erro | Chave |
+| `messages` | id, conversationId, seq, papel, partes (de Anexo, só os metadados), estado, timestamps (incluindo o primeiro token), Provedor, Modelo e Esforço, uso, stopReason, erro | Chave |
+| `attachments` | id, conversationId e os bytes preparados (`Blob`) | Chave |
 | `settings` | último Modelo e último Esforço, cache de Modelos por Provedor, Modelos do seletor | Chave |
 | `credentials` | Provedor → Chave | Qualquer dado de Conversa |
 
@@ -188,9 +194,11 @@ IndexedDB via Dexie. O schema está em `src/adapters/storage/db.ts`: `conversati
 
 **Duas abas:** a seleção é independente; a barra lateral e a Conversa aberta observam o store (`watchConversations`/`watchMessages`, `liveQuery` no Dexie), então o que outra aba grava aparece sem recarregar — no ritmo do flush, a cada 300 ms; Mensagens de uma Conversa são escritas por uma aba por vez (§4). Metadados da Conversa, como Título e Modelo, seguem last write wins, e cada mudança é lida e gravada numa só transação (`updateConversation`): o fim de um Fluxo só toca `updatedAt` e não desfaz a troca de Modelo ou o Título que outra aba ou a pessoa mudou enquanto a resposta chegava. Sem merge de texto entre abas.
 
-**Exportação:** `toi.exportHistory()` devolve um retrato do histórico no formato `toi.history` versão 1 (`app/export.ts`); a UI só transforma em arquivo. Lê apenas a porta de Conversas, então a Chave não tem caminho até o arquivo. Mensagem em Fluxo sai como `interrupted`. O Esforço da Conversa e da Mensagem entrou como campo novo, compatível, sem subir `version`.
+**Exportação:** `toi.exportHistory()` devolve um retrato do histórico no formato `toi.history` versão 1 (`app/export.ts`); a UI só transforma em arquivo. Lê apenas a porta de Conversas, então a Chave não tem caminho até o arquivo. Mensagem em Fluxo sai como `interrupted`. O Esforço da Conversa e da Mensagem entrou como campo novo, compatível, sem subir `version`; a Parte `file` também, com os bytes em base64. O arquivo é um `Blob` montado por Mensagem, para o histórico não virar uma string só ([ADR 0009](adr/0009-attachments-inline-local.md)).
 
-**Apagar conversas** limpa `conversations` e `messages`; **apagar tudo** também remove Configurações e todas as Chaves, por composição no app ([ADR 0004](adr/0004-indexeddb-separate-credential-store.md)). Duas ações distintas em Configurações, ambas com confirmação explícita na própria linha.
+**Anexos:** os bytes preparados ficam em `attachments`, fora da Mensagem, para o `watchMessages` não reler megabytes a cada flush. A UI lê cada imagem quando ela chega perto da tela; PDF e texto só são lidos para baixar. Decisão e alternativas no ADR 0009.
+
+**Apagar conversas** limpa `conversations`, `messages` e `attachments` numa transação, e apagar uma Conversa leva os Anexos dela; **apagar tudo** também remove Configurações e todas as Chaves, por composição no app ([ADR 0004](adr/0004-indexeddb-separate-credential-store.md)). Duas ações distintas em Configurações, ambas com confirmação explícita na própria linha.
 
 ## 7. Erros
 
@@ -204,6 +212,7 @@ Classificação por HTTP status; `error.type` reforça 429/529 e eventos de erro
 | `model_unavailable` | 404 | Atualizar lista |
 | `context_overflow` | 400 com detalhe de contexto (`prompt is too long`, `too many tokens`, `input length`) | Nova Conversa |
 | `request_too_large` | 413 | Nova Conversa |
+| `attachment_rejected` | 400 cujo detalhe fala de imagem, PDF, documento ou páginas, depois da checagem de contexto | Nova Conversa |
 | `invalid_request` | 400 (outros) | Detalhe técnico |
 | `rate_limited` | 429 ou `rate_limit_error` | Botão repetir, usando `retryAfterSeconds` |
 | `overloaded` | 529 ou `overloaded_error` | Botão repetir |
@@ -212,7 +221,8 @@ Classificação por HTTP status; `error.type` reforça 429/529 e eventos de erro
 | `aborted` | `AbortError` | Estado `interrupted` |
 | `not_connected` | `send`/`retry` sem Chave | Abrir onboarding |
 | `flow_busy` | `send`/`retry`/apagar com Fluxo em voo ou limpeza em andamento, nesta ou em outra aba | Avisar; na própria aba o composer já fica desabilitado |
-| `storage_failed` | IndexedDB recusou o flush final (`RunResult.persistError`) | Avisar que a resposta não foi salva |
+| `storage_failed` | IndexedDB recusou o flush final (`RunResult.persistError`) ou um Anexo do histórico sumiu do store | Avisar que a resposta não foi salva; Anexo sumido falha a resposta |
+| `storage_full` | `QuotaExceededError` ao gravar o envio (`startTurn`) | Avisar; texto e Anexos voltam ao composer |
 | `unknown` | qualquer outro | Detalhe técnico |
 
 As mensagens genéricas ficam em `src/domain/error.ts` (`appError`, `messageFor`, `truncatedError`); o adaptador sobrescreve as que nomeiam o Provedor (`api_error`, `unreachable`) e acrescenta detalhe. A UI nunca mostra o texto cru da API e a Chave nunca entra em mensagem de erro.
@@ -223,7 +233,7 @@ Não há retry automático na v1: "repetir" é sempre ação da pessoa e substit
 
 ### Crescimento do contexto
 
-Toda Mensagem reenvia o histórico. `build-request` estima tokens com `TokenEstimator` (heurística de ~3,5 caracteres por token) e, acima de 80% de `max_input_tokens` (ou de 200 mil quando a API não informar), descarta turnos do meio preservando o primeiro turno e os turnos mais recentes que couberem, sempre incluindo o atual. O turno atual entra mesmo se sozinho estourar o orçamento; nesse caso a API recusa com `context_overflow` e a UI oferece uma Conversa nova. Quando há corte, a UI avisa que parte do meio saiu do contexto. Contagem exata via `/v1/messages/count_tokens` fica para a v1.1.
+Toda Mensagem reenvia o histórico, com os Anexos. `build-request` estima tokens com `TokenEstimator` (heurística de ~3,5 caracteres por token; imagem por área, PDF por página, texto por byte). Primeiro, enquanto o histórico passa de um dos tetos da requisição (bytes, páginas, blocos ou 80% dos tokens), troca os Anexos dos turnos antigos, do mais antigo ao mais novo, por um marcador que diz que o arquivo saiu do contexto; os tetos e o porquê estão no [ADR 0009](adr/0009-attachments-inline-local.md). Depois, acima de 80% de `max_input_tokens` (ou de 200 mil quando a API não informar), descarta turnos do meio preservando o primeiro turno e os turnos mais recentes que couberem, sempre incluindo o atual. O turno atual entra mesmo se sozinho estourar o orçamento; nesse caso a API recusa com `context_overflow` e a UI oferece uma Conversa nova. Quando há corte, a UI avisa o que saiu do contexto: turnos do meio, Anexos antigos ou os dois. O marcador só existe na requisição; a Mensagem gravada não muda. Contagem exata via `/v1/messages/count_tokens` fica para a v1.1.
 
 ## 8. Segurança
 
@@ -246,27 +256,29 @@ Orçamento da v1. O que já é medível passa por `npm run size`; o resto são c
 - Só a Mensagem em Fluxo re-renderiza; a lista é memoizada por id + estado; o scroll acompanha o fim apenas se a pessoa já estava no fim.
 - **Markdown em Fluxo por blocos:** o texto é dividido em blocos de nível superior; blocos fechados são memoizados e só o último é reprocessado a cada frame. Reprocessar o texto inteiro por frame cresce com o tamanho da resposta e estoura o orçamento de long task.
 - **Revelação do Fluxo:** o Provedor entrega em rajadas (token isolado, silêncio, um monte de deltas). A tela corre um quarto de segundo atrás da chegada, na velocidade em que o texto chega, e espalha cada rajada pelo silêncio anterior; fechada `complete`, o que falta aparece em até 400 ms. Aba oculta, movimento reduzido, `interrupted` e `failed` mostram tudo de uma vez. No bloco em curso, `remend` fecha o Markdown incompleto e cada palavra nova entra com fade de opacidade; o rodapé de uso e o copiar esperam o texto inteiro. O cursor só aparece com o Fluxo aberto e nada correndo (antes do primeiro token ou com o texto parado há 400 ms): enquanto o texto corre, a entrada das palavras já marca onde ele está.
+- **Anexos fora do caminho inicial:** o preparo (`ui/attachments/prepare.ts`, com a contagem de páginas) é um chunk carregado no primeiro Anexo, e a imagem é reduzida por `OffscreenCanvas`. A leitura dos bytes no envio é assíncrona; medido ao implementar, enviar 20 MB não gerou long task, por isso o corpo da requisição continua uma string só.
 - **Shiki enxuto:** `shiki/core` com o engine de regex em JavaScript (sem wasm) e grammars carregadas sob demanda; o highlight roda quando o bloco de código fecha, nunca a cada delta.
 
-Implementação: `ui/use-messages.ts` junta deltas por frame; `ui/reveal.ts` decide quanto do texto está à vista e `ui/use-reveal.ts` roda um rAF por Mensagem enquanto há o que revelar; `ui/blocks.ts` divide o Markdown em blocos, cortando em linha em branco fora de bloco de código e sem separar continuação recuada de lista; `ui/Prose.tsx` memoiza cada bloco; `ui/markdown/Markdown.tsx` cura o bloco em curso e põe cada palavra num `span` (as chaves por posição do react-markdown mantêm as que já estavam, então só as novas animam). Markdown, Shiki e Configurações são três chunks separados. A long task é medida em `tests/e2e/performance.spec.ts` contra o build de produção, com os chunks lazy já carregados. Tempo de primeira interação não é orçamento: depende da rede e da máquina. O que controlamos é bytes, trabalho de main thread e número de re-renders.
+Implementação: `ui/use-messages.ts` junta deltas por frame; `ui/reveal.ts` decide quanto do texto está à vista e `ui/use-reveal.ts` roda um rAF por Mensagem enquanto há o que revelar; `ui/blocks.ts` divide o Markdown em blocos, cortando em linha em branco fora de bloco de código e sem separar continuação recuada de lista; `ui/Prose.tsx` memoiza cada bloco; `ui/markdown/Markdown.tsx` cura o bloco em curso e põe cada palavra num `span` (as chaves por posição do react-markdown mantêm as que já estavam, então só as novas animam). Markdown, Shiki, Configurações e o preparo de Anexos são quatro chunks separados. A long task é medida em `tests/e2e/performance.spec.ts` contra o build de produção, com os chunks lazy já carregados. Tempo de primeira interação não é orçamento: depende da rede e da máquina. O que controlamos é bytes, trabalho de main thread e número de re-renders.
 
 ## 10. Testes
 
 | Fronteira | O que testa | Como |
 |---|---|---|
-| `domain` | título, famílias e marcação de Modelos, ritmo da resposta | Vitest puro |
+| `domain` | título, famílias e marcação de Modelos, ritmo da resposta, tipo e dimensões pelos bytes, limites por Mensagem | Vitest puro |
 | `adapters/http`, `protocols`, `providers` | parser SSE, mappers e classificação de erros HTTP | streams SSE montados no teste: texto, `ping`, `error`, evento desconhecido, chunk cortado no meio de um caractere Unicode; casos principais de status; `retry-after` em segundos |
-| `adapters/storage` | contrato da porta, schema, cascata e fronteira da Chave | `MemoryStore` + Dexie com `fake-indexeddb` |
-| `app/build-request` | fusão de papéis, descarte de Mensagens vazias, truncamento | Vitest puro |
-| `app/send-message` | enviar, abortar, falhar, retry, `finished` terminal, falha de persistência, instante do primeiro token | Provedor fake + store em memória |
+| `adapters/storage` | contrato da porta, schema, transação do envio, cascata de Anexos, `storage_full` e fronteira da Chave | `MemoryStore` + Dexie com `fake-indexeddb` |
+| `app/build-request` | fusão de papéis, descarte de Mensagens vazias, elisão de Anexos por teto, truncamento, blocos da requisição | Vitest puro |
+| `app/send-message` | enviar, abortar, falhar, retry, `finished` terminal, falha de persistência, instante do primeiro token, Anexos (bytes enviados, parar durante a leitura, Anexo sumido) | Provedor fake + store em memória |
 | `app/flow` | `stop` antes do Fluxo começar, `flush`, duas abas na mesma Conversa | Provedor fake + store em memória; duas instâncias de `Flow` com os mesmos locks simulam duas abas |
 | `app/recover-interrupted` | lock livre, lock ocupado, Mensagem fechada entre listar e travar | clock fixo + store e locks em memória |
 | `adapters/locks` | exclusive, shared e a soltura assíncrona | o mesmo contrato contra o `WebLocks` sobre o `navigator.locks` real do Node e contra o `MemoryLocks` dos testes, que o espelha |
-| `app/export` | Fluxo em voo | store em memória |
+| `app/export` | Fluxo em voo, Parte `file` com os bytes | store em memória |
 | `app/toi`/`connect` | validar antes de gravar, Chave anterior preservada, apagar só a Conversa em voo, recusar envio durante apagar tudo, recusar limpeza com Fluxo em outra aba, exportar no formato `toi.history` sem a Chave | fakes de store, credencial, settings e Provedor; um caso com Web Locks reais |
-| `ui` (puro) | divisão em blocos, a mescla entre store e Fluxo local e a revelação contra traces de rajada | Vitest em Node (`tests/ui-pure.test.ts`, `tests/reveal.test.ts`) |
-| `ui` (componentes) | Markdown seguro (sem HTML cru, links, imagens, `javascript:`), highlight só em bloco fechado, Markdown curado e palavras estáveis no bloco em curso, rodapé só com a resposta inteira, onboarding, enviar, parar com esc, shift+enter, apagar com confirmação | Vitest em modo browser no Chromium (`tests/ui/`), com `createToi` real sobre stores em memória |
-| E2E | enviar, parar e tentar de novo, recarregar no meio do Fluxo, duas abas, orçamento de long task da §9 | Playwright contra `vite preview` do build (`tests/e2e/`); só `fetch` para a Anthropic é simulado, o resto é o navegador real |
+| `ui` (puro) | divisão em blocos, a mescla entre store e Fluxo local, a revelação contra traces de rajada e a contagem de páginas de PDF | Vitest em Node (`tests/ui-pure.test.ts`, `tests/reveal.test.ts`, `tests/pdf-pages.test.ts`) |
+| `ui/attachments` (preparo) | rotação EXIF sem metadados, redução, PNG ou JPEG, pixels demais, formato que o navegador não abre, texto UTF-8 | Vitest em modo browser no Chromium (`tests/ui/prepare.test.tsx`) |
+| `ui` (componentes) | Markdown seguro (sem HTML cru, links, imagens, `javascript:`), highlight só em bloco fechado, Markdown curado e palavras estáveis no bloco em curso, rodapé só com a resposta inteira, onboarding, enviar, parar com esc, shift+enter, apagar com confirmação, anexar por clipe, colar e soltar, Anexo recusado, `storage_full` devolvendo o rascunho | Vitest em modo browser no Chromium (`tests/ui/`), com `createToi` real sobre stores em memória |
+| E2E | enviar, parar e tentar de novo, recarregar no meio do Fluxo, duas abas, orçamento de long task da §9, Anexos depois de recarregar e tentar de novo com eles | Playwright contra `vite preview` do build (`tests/e2e/`); só `fetch` para a Anthropic é simulado, o resto é o navegador real |
 
 Regras: teste não usa `sleep`; debounce usa fake timers e instantes vêm de clock injetado. Teste de regressão fica vermelho no código anterior. Nada de teste que só confirme wiring.
 
@@ -297,7 +309,6 @@ Sem router na v1: uma tela, Conversa selecionada em estado da UI. Sem SDK de IA:
 3. System prompt e parâmetros (temperatura, `max_tokens`).
 4. Contagem exata de tokens via `/v1/messages/count_tokens`.
 5. Busca no histórico e no texto.
-6. Anexos de imagem (base64 na Mensagem; `/v1/files` não suporta CORS).
-7. Segundo Provedor (OpenAI, depois OpenCode Go e Google), sobre a separação do [ADR 0008](adr/0008-provider-and-protocol.md).
-8. PWA e uso offline do shell.
-9. Criptografia da Chave com passphrase, se o modelo de ameaça mudar.
+6. Segundo Provedor (OpenAI, depois OpenCode Go e Google), sobre a separação do [ADR 0008](adr/0008-provider-and-protocol.md).
+7. PWA e uso offline do shell.
+8. Criptografia da Chave com passphrase, se o modelo de ameaça mudar.
