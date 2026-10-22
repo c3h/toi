@@ -1,6 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import { mapAnthropicStream } from '../src/adapters/anthropic/stream';
+import { mapAnthropicStream } from '../src/adapters/protocols/anthropic-messages/stream';
+import { anthropicErrors } from '../src/adapters/providers/anthropic/info';
 import { collect, sse, streamOf } from './helpers';
+
+const map = (body: ReadableStream<Uint8Array>) => mapAnthropicStream(body, anthropicErrors);
 
 const textStream = (): string =>
   sse([
@@ -46,7 +49,7 @@ const textStream = (): string =>
 
 describe('mapAnthropicStream', () => {
   it('traduz o stream em Eventos do domínio e faz merge do uso', async () => {
-    const events = await collect(mapAnthropicStream(streamOf([textStream()])));
+    const events = await collect(map(streamOf([textStream()])));
 
     expect(events).toEqual([
       {
@@ -119,7 +122,7 @@ describe('mapAnthropicStream', () => {
       { event: 'message_stop', data: { type: 'message_stop' } },
     ]);
 
-    const events = await collect(mapAnthropicStream(streamOf([body])));
+    const events = await collect(map(streamOf([body])));
 
     expect(events.filter((event) => event.type === 'delta')).toEqual([
       { type: 'delta', index: 1, part: 'text', text: 'resposta' },
@@ -132,7 +135,7 @@ describe('mapAnthropicStream', () => {
       { event: 'message_stop', data: { type: 'message_stop' } },
     ]);
 
-    await expect(collect(mapAnthropicStream(streamOf([body])))).resolves.toEqual([
+    await expect(collect(map(streamOf([body])))).resolves.toEqual([
       { type: 'finished' },
     ]);
   });
@@ -145,7 +148,7 @@ describe('mapAnthropicStream', () => {
       },
     ]);
 
-    await expect(collect(mapAnthropicStream(streamOf([body])))).rejects.toMatchObject({
+    await expect(collect(map(streamOf([body])))).rejects.toMatchObject({
       code: 'overloaded',
     });
   });
@@ -169,7 +172,7 @@ describe('mapAnthropicStream', () => {
       },
     ]);
 
-    await expect(collect(mapAnthropicStream(streamOf([body])))).rejects.toMatchObject({
+    await expect(collect(map(streamOf([body])))).rejects.toMatchObject({
       code: 'unreachable',
     });
   });

@@ -1,8 +1,8 @@
-import { truncatedError } from '../../domain/error';
-import type { StreamEvent } from '../../domain/stream';
-import { emptyUsage, type StopReason, type Usage } from '../../domain/usage';
-import { errorFromEvent, unreadableError } from './error';
-import { parseSse } from './sse';
+import { truncatedError } from '../../../domain/error';
+import type { StreamEvent } from '../../../domain/stream';
+import { emptyUsage, type StopReason, type Usage } from '../../../domain/usage';
+import { parseSse } from '../../http/sse';
+import type { AnthropicMessagesErrors } from './error';
 import type { AnthropicStreamEvent, AnthropicUsage } from './types';
 
 const stopReason = (value: string | null | undefined): StopReason => {
@@ -27,6 +27,7 @@ const mergeInputUsage = (usage: Usage, raw: AnthropicUsage): void => {
 
 export async function* mapAnthropicStream(
   body: ReadableStream<Uint8Array>,
+  errors: AnthropicMessagesErrors,
 ): AsyncGenerator<StreamEvent> {
   const usage = emptyUsage();
   const textBlocks = new Set<number>();
@@ -39,7 +40,7 @@ export async function* mapAnthropicStream(
     try {
       payload = JSON.parse(frame.data) as AnthropicStreamEvent;
     } catch (cause) {
-      throw unreadableError(cause);
+      throw errors.unreadable(cause);
     }
 
     switch (payload.type) {
@@ -98,7 +99,7 @@ export async function* mapAnthropicStream(
       }
 
       case 'error': {
-        throw errorFromEvent(payload.error);
+        throw errors.fromEvent(payload.error);
       }
 
       case 'ping': {

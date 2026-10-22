@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import type { FetchLike } from '../src/adapters/anthropic/fetch';
-import { fetchModels } from '../src/adapters/anthropic/models';
+import type { FetchLike } from '../src/adapters/http/fetch';
+import { fetchModels } from '../src/adapters/providers/anthropic/models';
 import { systemClock } from '../src/ports/clock';
 import { errorEnvelope, jsonResponse } from './helpers';
 
@@ -49,7 +49,7 @@ describe('fetchModels', () => {
     expect(urls[1]).toContain('after_id=m1');
     expect(headers[0]).toMatchObject({
       'x-api-key': 'sk-test',
-      'anthropic-version': '2023-06-01',
+      'anthropic-version': '2026-10-21',
       'anthropic-dangerous-direct-browser-access': 'true',
     });
   });

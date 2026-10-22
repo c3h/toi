@@ -1,25 +1,43 @@
 import type { Conversation } from '../src/domain/conversation';
 import { appError } from '../src/domain/error';
 import type { Message } from '../src/domain/message';
-import type { Model } from '../src/domain/model';
+import type { Model, ModelPicks, ModelRef } from '../src/domain/model';
 import type { ProviderId } from '../src/domain/ids';
 import type { StreamEvent } from '../src/domain/stream';
 import { emptyUsage } from '../src/domain/usage';
-import type { ChatProvider, ChatRequest } from '../src/ports/chat-provider';
+import type { ChatProvider, ChatRequest, ProviderAdapter } from '../src/ports/chat-provider';
 import type { FlowDeps } from '../src/app/flow';
 import { MemoryLocks } from '../src/adapters/locks/memory';
+import { anthropicInfo } from '../src/adapters/providers/anthropic/info';
+import { anthropicFamily } from '../src/adapters/providers/anthropic/models';
 import type { Clock } from '../src/ports/clock';
 import type { ConversationStore } from '../src/ports/conversation-store';
 import type { CredentialStore } from '../src/ports/credential-store';
 import type { SettingsStore } from '../src/ports/settings-store';
 
 export const testModel: Model = {
-  id: 'claude-test',
+  provider: 'anthropic',
+  id: 'claude-sonnet-test',
   displayName: 'Claude Test',
+  family: 'sonnet',
   maxTokens: 8192,
   maxInputTokens: 200_000,
   createdAt: '2026-01-01T00:00:00Z',
 };
+
+/** Um Modelo da Anthropic com a família que o Provedor daria ao id. */
+export const makeModel = (id: string, overrides: Partial<Model> = {}): Model => ({
+  ...testModel,
+  id,
+  displayName: id,
+  family: anthropicFamily(id),
+  ...overrides,
+});
+
+/** Os Provedores de `createToi`: um só, criado por `create` a cada Chave. */
+export const providersOf = (create: (apiKey: string) => ChatProvider): ProviderAdapter[] => [
+  { info: anthropicInfo, create },
+];
 
 export const streamOf = (chunks: Array<string | Uint8Array>): ReadableStream<Uint8Array> => {
   const encoder = new TextEncoder();
@@ -52,6 +70,7 @@ export const makeMessage = (
   status: 'complete',
   createdAt: 1_000,
   completedAt: 1_000,
+  provider: overrides.role === 'assistant' ? 'anthropic' : null,
   model: null,
   usage: null,
   stopReason: null,
@@ -66,6 +85,7 @@ export const makeConversation = (
 ): Conversation => ({
   id,
   title: 'Nova conversa',
+  provider: testModel.provider,
   model: testModel.id,
   createdAt: 1,
   updatedAt: 1,
@@ -109,6 +129,19 @@ export class MemoryStore implements ConversationStore {
   async putConversation(conversation: Conversation): Promise<void> {
     this.conversations.set(conversation.id, conversation);
     this.#changed();
+  }
+
+  async updateConversation(
+    id: string,
+    change: (conversation: Conversation) => Conversation,
+  ): Promise<Conversation | null> {
+    const current = this.conversations.get(id);
+    if (!current) return null;
+
+    const updated = change(current);
+    this.conversations.set(id, updated);
+    this.#changed();
+    return updated;
   }
 
   async deleteConversation(id: string): Promise<void> {
@@ -159,25 +192,37 @@ export class MemoryCredentialStore implements CredentialStore {
   async delete(provider: ProviderId): Promise<void> {
     this.keys.delete(provider);
   }
+
+  async clear(): Promise<void> {
+    this.keys.clear();
+  }
 }
 
 export class MemorySettingsStore implements SettingsStore {
   readonly values = new Map<string, unknown>();
 
-  async models(): Promise<Model[] | null> {
-    return (this.values.get('models') as Model[] | undefined) ?? null;
+  async models(provider: ProviderId): Promise<Model[] | null> {
+    return (this.values.get(`models:${provider}`) as Model[] | undefined) ?? null;
   }
 
-  async saveModels(models: Model[]): Promise<void> {
-    this.values.set('models', models);
+  async saveModels(provider: ProviderId, models: Model[]): Promise<void> {
+    this.values.set(`models:${provider}`, models);
   }
 
-  async lastModel(): Promise<string | null> {
-    return (this.values.get('lastModel') as string | undefined) ?? null;
+  async lastModel(): Promise<ModelRef | null> {
+    return (this.values.get('lastModel') as ModelRef | undefined) ?? null;
   }
 
-  async saveLastModel(id: string): Promise<void> {
-    this.values.set('lastModel', id);
+  async saveLastModel(model: ModelRef): Promise<void> {
+    this.values.set('lastModel', model);
+  }
+
+  async modelPicks(): Promise<ModelPicks | null> {
+    return (this.values.get('modelPicks') as ModelPicks | undefined) ?? null;
+  }
+
+  async saveModelPicks(picks: ModelPicks): Promise<void> {
+    this.values.set('modelPicks', picks);
   }
 
   async clear(): Promise<void> {
@@ -200,13 +245,15 @@ type Script = StreamEvent[] | ((signal: AbortSignal) => AsyncIterable<StreamEven
 export class ScriptedProvider implements ChatProvider {
   readonly requests: ChatRequest[] = [];
   readonly script: Script;
+  readonly models: Model[];
 
-  constructor(script: Script) {
+  constructor(script: Script, models: Model[] = [testModel]) {
     this.script = script;
+    this.models = models;
   }
 
   async listModels(): Promise<Model[]> {
-    return [testModel];
+    return this.models;
   }
 
   async *stream(request: ChatRequest, signal: AbortSignal): AsyncGenerator<StreamEvent> {
@@ -238,12 +285,18 @@ export const replyEvents = (text = 'Olá'): StreamEvent[] => [
   { type: 'finished' },
 ];
 
+/** Uma Promise e quem a resolve, para o teste marcar um ponto do Fluxo. */
+export const deferred = (): { promise: Promise<void>; resolve: () => void } => {
+  let resolve: () => void = () => undefined;
+  const promise = new Promise<void>((done) => {
+    resolve = done;
+  });
+  return { promise, resolve };
+};
+
 /** Emite um `delta`, sinaliza `delta` e espera o abort. */
 export const gatedProvider = () => {
-  let signalDelta: () => void = () => undefined;
-  const delta = new Promise<void>((resolve) => {
-    signalDelta = resolve;
-  });
+  const { promise: delta, resolve: signalDelta } = deferred();
 
   const provider = new ScriptedProvider(async function* (
     signal: AbortSignal,

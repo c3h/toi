@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
-import type { FetchLike } from '../src/adapters/anthropic/fetch';
-import { AnthropicProvider } from '../src/adapters/anthropic/provider';
-import { toAnthropicPayload } from '../src/adapters/anthropic/request';
+import type { FetchLike } from '../src/adapters/http/fetch';
+import { AnthropicProvider } from '../src/adapters/providers/anthropic/provider';
+import { toAnthropicPayload } from '../src/adapters/protocols/anthropic-messages/request';
 import { collect, sse, streamOf } from './helpers';
 
 describe('AnthropicProvider', () => {
@@ -36,7 +36,7 @@ describe('AnthropicProvider', () => {
     expect(captured!.init?.headers).toMatchObject({
       'content-type': 'application/json',
       'x-api-key': 'sk-test',
-      'anthropic-version': '2023-06-01',
+      'anthropic-version': '2026-10-21',
       'anthropic-dangerous-direct-browser-access': 'true',
     });
     expect(JSON.parse(captured!.init?.body as string)).toEqual({
@@ -47,13 +47,12 @@ describe('AnthropicProvider', () => {
     });
   });
 
-  it('mapeia system, temperature e raciocínio para o formato da Anthropic', () => {
+  it('mapeia system e raciocínio para o formato da Anthropic', () => {
     expect(
       toAnthropicPayload({
         model: 'claude-test',
         maxTokens: 128,
         system: 'Seja breve.',
-        temperature: 0.2,
         messages: [
           { role: 'user', parts: [{ type: 'text', text: 'oi' }] },
           {
@@ -70,7 +69,6 @@ describe('AnthropicProvider', () => {
       max_tokens: 128,
       stream: true,
       system: 'Seja breve.',
-      temperature: 0.2,
       messages: [
         { role: 'user', content: [{ type: 'text', text: 'oi' }] },
         {

@@ -1,14 +1,13 @@
-import { AppError } from '../../domain/error';
-import type { Model } from '../../domain/model';
-import type { StreamEvent } from '../../domain/stream';
-import { systemClock, type Clock } from '../../ports/clock';
-import type { ChatProvider, ChatRequest } from '../../ports/chat-provider';
-import { anthropicFetch, type FetchLike } from './fetch';
+import type { Model } from '../../../domain/model';
+import type { StreamEvent } from '../../../domain/stream';
+import { systemClock, type Clock } from '../../../ports/clock';
+import type { ChatProvider, ChatRequest, ProviderAdapter } from '../../../ports/chat-provider';
+import type { FetchLike } from '../../http/fetch';
+import { toAnthropicPayload } from '../../protocols/anthropic-messages/request';
+import { mapAnthropicStream } from '../../protocols/anthropic-messages/stream';
+import { anthropicFetch, API_URL } from './fetch';
+import { anthropicErrors, anthropicInfo } from './info';
 import { fetchModels } from './models';
-import { toAnthropicPayload } from './request';
-import { mapAnthropicStream } from './stream';
-
-const MESSAGES_URL = 'https://api.anthropic.com/v1/messages';
 
 export class AnthropicProvider implements ChatProvider {
   readonly #apiKey: string;
@@ -33,7 +32,7 @@ export class AnthropicProvider implements ChatProvider {
     const response = await anthropicFetch(
       this.#fetch,
       this.#apiKey,
-      MESSAGES_URL,
+      `${API_URL}/messages`,
       {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
@@ -43,8 +42,13 @@ export class AnthropicProvider implements ChatProvider {
       this.#clock,
     );
 
-    if (!response.body) throw new AppError('unknown', 'A Anthropic respondeu sem corpo.');
+    if (!response.body) throw anthropicErrors.noBody();
 
-    yield* mapAnthropicStream(response.body);
+    yield* mapAnthropicStream(response.body, anthropicErrors);
   }
 }
+
+export const anthropic: ProviderAdapter = {
+  info: anthropicInfo,
+  create: (apiKey) => new AnthropicProvider(apiKey),
+};

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { parseSse } from '../src/adapters/anthropic/sse';
+import { parseSse } from '../src/adapters/http/sse';
 import { collect, streamOf } from './helpers';
 
 describe('parseSse', () => {

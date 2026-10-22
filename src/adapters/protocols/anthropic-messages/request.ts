@@ -1,5 +1,5 @@
-import type { Part } from '../../domain/message';
-import type { ChatRequest } from '../../ports/chat-provider';
+import type { Part } from '../../../domain/message';
+import type { ChatRequest } from '../../../ports/chat-provider';
 
 export type AnthropicContentBlock =
   | { type: 'text'; text: string }
@@ -10,7 +10,6 @@ export interface AnthropicPayload {
   max_tokens: number;
   stream: true;
   system?: string;
-  temperature?: number;
   messages: Array<{ role: 'user' | 'assistant'; content: AnthropicContentBlock[] }>;
 }
 
@@ -28,9 +27,11 @@ export const toAnthropicPayload = (request: ChatRequest): AnthropicPayload => ({
   max_tokens: request.maxTokens,
   stream: true,
   ...(request.system === undefined ? {} : { system: request.system }),
-  ...(request.temperature === undefined ? {} : { temperature: request.temperature }),
   messages: request.messages.map((message) => ({
     role: message.role,
     content: message.parts.map(toContentBlock),
   })),
 });
+
+/** Headers do Protocolo; autenticação e acesso pelo navegador são do Provedor. */
+export const ANTHROPIC_MESSAGES_HEADERS = { 'anthropic-version': '2026-10-21' } as const;

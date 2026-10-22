@@ -76,18 +76,3 @@ export interface AnthropicErrorEnvelope {
     message: string;
   };
 }
-
-export interface AnthropicModel {
-  id: string;
-  display_name?: string;
-  max_tokens?: number | null;
-  max_input_tokens?: number | null;
-  created_at?: string;
-  lifecycle?: 'active' | 'deprecated' | 'retired';
-}
-
-export interface AnthropicModelsPage {
-  data: AnthropicModel[];
-  has_more: boolean;
-  last_id: string | null;
-}
