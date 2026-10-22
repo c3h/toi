@@ -6,11 +6,13 @@ import type { Conversation } from '../domain/conversation';
 import type { ConversationId } from '../domain/ids';
 import type { Message } from '../domain/message';
 import {
+  DEFAULT_EFFORT,
   defaultModel,
   findModel,
   pickedModels,
   refFrom,
   refOf,
+  type Effort,
   type Model,
   type ModelPicks,
   type ModelRef,
@@ -50,6 +52,7 @@ export const App = ({ toi }: { toi: Toi }) => {
   const [settings, setSettings] = useState<SettingsSection | null>(null);
   const [models, setModels] = useState<ModelsState>({ list: [], stale: null, refreshing: true });
   const [lastModel, setLastModel] = useState<ModelRef | null>(null);
+  const [lastEffort, setLastEffort] = useState<Effort | null>(null);
   const [modelPicks, setModelPicks] = useState<ModelPicks>(toi.defaultModelPicks);
   const [modelPicksError, setModelPicksError] = useState<ModelPicksError | null>(null);
   const [conversations, setConversations] = useState<Conversation[] | null>(null);
@@ -65,6 +68,7 @@ export const App = ({ toi }: { toi: Toi }) => {
   useEffect(() => followSystemTheme(), []);
   useEffect(() => {
     void toi.lastModel().then(setLastModel);
+    void toi.lastEffort().then(setLastEffort);
     void toi.modelPicks().then(setModelPicks, (cause) =>
       setModelPicksError({ kind: 'read', error: errorInfo(cause) }),
     );
@@ -113,6 +117,7 @@ export const App = ({ toi }: { toi: Toi }) => {
   const model =
     findModel(list, refFrom(conversation)) ??
     defaultModel(options, lastModel);
+  const effort = conversation ? conversation.effort : (lastEffort ?? DEFAULT_EFFORT);
 
   // Otimista; se não grava, volta ao que está salvo e diz por quê.
   const changeModelPicks = async (picks: ModelPicks) => {
@@ -130,6 +135,17 @@ export const App = ({ toi }: { toi: Toi }) => {
   const changeModel = async (next: Model) => {
     setLastModel(refOf(next));
     if (conversation) await toi.changeModel(conversation.id, refOf(next));
+  };
+
+  const changeEffort = async (next: Effort) => {
+    setLastEffort(next);
+    if (conversation) await toi.changeEffort(conversation.id, next);
+  };
+
+  // O envio grava Modelo e Esforço como default da próxima Conversa; o rascunho já nasce com eles.
+  const remember = (sent: Model, sentEffort: Effort) => {
+    setLastModel(refOf(sent));
+    setLastEffort(sentEffort);
   };
 
   const run = async (
@@ -158,14 +174,13 @@ export const App = ({ toi }: { toi: Toi }) => {
     let target = conversation;
     if (!target) {
       try {
-        target = await toi.createConversation(refOf(model));
+        target = await toi.createConversation(refOf(model), effort);
       } catch (cause) {
         setNotice({ kind: 'error', error: errorInfo(cause) });
         return false;
       }
       // Pedir cedo reduz a chance de o navegador descartar o histórico.
       void requestPersistence();
-      setLastModel(refOf(model));
       const created = target;
       // Entra já na lista para a seleção não ser descartada antes de o watch entregar.
       setConversations((current) =>
@@ -175,13 +190,20 @@ export const App = ({ toi }: { toi: Toi }) => {
     }
 
     const id = target.id;
-    return run(id, () => toi.flow.send({ conversationId: id, text, model }));
+    remember(model, effort);
+    return run(id, () => toi.flow.send({ conversationId: id, text, model, effort }));
   };
 
   const retry = (message: Message) => {
     if (!model) return;
+    remember(model, effort);
     void run(message.conversationId, () =>
-      toi.flow.retry({ conversationId: message.conversationId, messageId: message.id, model }),
+      toi.flow.retry({
+        conversationId: message.conversationId,
+        messageId: message.id,
+        model,
+        effort,
+      }),
     );
   };
 
@@ -321,6 +343,7 @@ export const App = ({ toi }: { toi: Toi }) => {
               onErasedAll={() => {
                 select(null);
                 setLastModel(null);
+                setLastEffort(null);
                 setModelPicks(toi.defaultModelPicks());
                 setModelPicksError(null);
                 setConnected(false);
@@ -387,10 +410,12 @@ export const App = ({ toi }: { toi: Toi }) => {
                 models={list}
                 modelOptions={options}
                 model={model}
+                effort={effort}
                 running={running !== null}
                 notice={notice}
                 noticeAction={noticeAction(notice)}
                 onModelChange={(next) => void changeModel(next)}
+                onEffortChange={(next) => void changeEffort(next)}
                 onManageModels={() => setSettings('modelos')}
                 onSend={send}
                 onStop={() => void toi.flow.stop()}

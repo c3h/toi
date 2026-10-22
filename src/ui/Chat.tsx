@@ -7,6 +7,7 @@ import {
   Timer,
   X,
   Zap,
+  Gauge,
   type LucideIcon,
 } from 'lucide-react';
 import {
@@ -25,8 +26,9 @@ import type { ProviderInfo, Toi } from '../app/toi';
 import { messageFor, type AppErrorInfo } from '../domain/error';
 import type { ConversationId } from '../domain/ids';
 import { finalUsageOf, textOf, timingOf, type Message } from '../domain/message';
-import { findModel, refFrom, type Model } from '../domain/model';
+import { findModel, refFrom, type Effort, type Model } from '../domain/model';
 import { CopyButton } from './CopyButton';
+import { EffortPicker, effortLabel } from './EffortPicker';
 import { ModelPicker } from './ModelPicker';
 import { preloadMarkdown, Prose } from './Prose';
 import { formatSeconds, formatTokens, lower } from './support';
@@ -55,10 +57,12 @@ interface ChatProps {
   /** Os que o seletor oferece. */
   modelOptions: Model[];
   model: Model | null;
+  effort: Effort;
   running: boolean;
   notice: Notice | null;
   noticeAction: NoticeAction | null;
   onModelChange: (model: Model) => void;
+  onEffortChange: (effort: Effort) => void;
   onManageModels: () => void;
   onSend: (text: string) => Promise<boolean>;
   onStop: () => void;
@@ -142,8 +146,12 @@ const Reply = ({ message, models, retryable, onRetry }: MessageViewProps) => {
   const { shown, revealing, waiting, animate } = useReveal(text, message.status);
 
   const name = modelName(message, models);
-  // O rodapé de fechamento espera o texto inteiro estar à vista.
-  const stats = revealing ? [] : statsOf(message);
+  const effort = message.effort && effortLabel(message.effort);
+  // O Esforço é sabido desde o envio; o resto do rodapé espera o texto inteiro estar à vista.
+  const stats: Stat[] = [
+    ...(effort ? [{ icon: Gauge, short: effort, label: `esforço ${effort}` }] : []),
+    ...(revealing ? [] : statsOf(message)),
+  ];
   const cut = !revealing && message.stopReason === 'max_tokens';
   const copyable = !revealing && text.trim() !== '';
   const status =
@@ -202,10 +210,12 @@ export const Chat = ({
   models,
   modelOptions,
   model,
+  effort,
   running,
   notice,
   noticeAction,
   onModelChange,
+  onEffortChange,
   onManageModels,
   onSend,
   onStop,
@@ -389,13 +399,16 @@ export const Chat = ({
           />
           <div className="flex items-center justify-between gap-3 py-2 pr-2 pl-2.5">
             {model ? (
-              <ModelPicker
-                options={modelOptions}
-                model={model}
-                disabled={running}
-                onChange={onModelChange}
-                onManage={onManageModels}
-              />
+              <div className="flex min-w-0 items-center gap-1">
+                <ModelPicker
+                  options={modelOptions}
+                  model={model}
+                  disabled={running}
+                  onChange={onModelChange}
+                  onManage={onManageModels}
+                />
+                <EffortPicker effort={effort} disabled={running} onChange={onEffortChange} />
+              </div>
             ) : (
               <span />
             )}
