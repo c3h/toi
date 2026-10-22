@@ -33,6 +33,11 @@ export interface ChatRequest {
   model: string;
   maxTokens: number;
   effort: Effort;
+  /**
+   * `off` pede a resposta sem raciocínio. Um Modelo sem `reasoningOff`
+   * raciocina mesmo assim, no `effort` dado.
+   */
+  reasoning: 'on' | 'off';
   messages: ChatMessage[];
   /** Instrução de sistema; campo próprio, nunca uma Mensagem. */
   system?: string;
@@ -68,6 +73,8 @@ export interface ProviderInfo {
   keysUrl: string;
   /** Famílias que o seletor oferece até a pessoa mexer na lista. */
   defaultFamilies: string[];
+  /** Família que nomeia as Conversas até a pessoa escolher um Modelo. */
+  titleFamily: string;
 }
 
 /** Um Provedor registrado no composition root: o descritor e como conectar com uma Chave. */
