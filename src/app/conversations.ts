@@ -1,5 +1,6 @@
 import { MAX_TITLE_LENGTH, normalizeTitle, type Conversation } from '../domain/conversation';
 import type { ConversationId } from '../domain/ids';
+import { fieldsOf, type ModelRef } from '../domain/model';
 import type { Clock } from '../ports/clock';
 import type { ConversationStore } from '../ports/conversation-store';
 
@@ -11,14 +12,14 @@ export interface ConversationDeps {
 
 export const createConversation = async (
   deps: ConversationDeps,
-  model: string,
+  model: ModelRef,
 ): Promise<Conversation> => {
   const now = deps.clock.now();
 
   const conversation: Conversation = {
     id: deps.newId(),
     title: 'Nova conversa',
-    model,
+    ...fieldsOf(model),
     createdAt: now,
     updatedAt: now,
   };
@@ -27,40 +28,31 @@ export const createConversation = async (
   return conversation;
 };
 
-export const renameConversation = async (
+export const renameConversation = (
   deps: ConversationDeps,
   id: ConversationId,
   title: string,
 ): Promise<Conversation | null> => {
-  const conversation = await deps.store.getConversation(id);
-  if (!conversation) return null;
-
   const clean = normalizeTitle(title);
-  if (!clean) return conversation;
+  if (!clean) return deps.store.getConversation(id);
 
-  const updated: Conversation = {
+  return deps.store.updateConversation(id, (conversation) => ({
     ...conversation,
     title: clean.slice(0, MAX_TITLE_LENGTH),
     updatedAt: deps.clock.now(),
-  };
-
-  await deps.store.putConversation(updated);
-  return updated;
+  }));
 };
 
 /** O seletor muda a Conversa atual; o `updatedAt` não muda porque nada foi dito. */
-export const changeModel = async (
+export const changeModel = (
   deps: ConversationDeps,
   id: ConversationId,
-  model: string,
-): Promise<Conversation | null> => {
-  const conversation = await deps.store.getConversation(id);
-  if (!conversation) return null;
-
-  const updated: Conversation = { ...conversation, model };
-  await deps.store.putConversation(updated);
-  return updated;
-};
+  model: ModelRef,
+): Promise<Conversation | null> =>
+  deps.store.updateConversation(id, (conversation) => ({
+    ...conversation,
+    ...fieldsOf(model),
+  }));
 
 export const deleteConversation = async (
   deps: ConversationDeps,

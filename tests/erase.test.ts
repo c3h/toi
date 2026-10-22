@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { eraseAll, eraseConversations } from '../src/app/erase';
+import type { ProviderId } from '../src/domain/ids';
 import {
   makeConversation,
   makeMessage,
@@ -50,5 +51,14 @@ describe('erase', () => {
     expect(await store.listMessages('c1')).toEqual([]);
     expect(await credentials.get('anthropic')).toBeNull();
     expect(settings.values.size).toBe(0);
+  });
+
+  it('apagar tudo remove a Chave de qualquer Provedor, inclusive um que saiu do registro', async () => {
+    const { store, credentials, settings } = await seed();
+    await credentials.set('removido' as ProviderId, 'sk-velha');
+
+    await eraseAll({ store, credentials, settings });
+
+    expect(credentials.keys.size).toBe(0);
   });
 });

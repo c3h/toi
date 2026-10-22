@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { WebLocks } from '../src/adapters/locks/web';
 import { createToi, type ToiDeps } from '../src/app/toi';
 import {
+  deferred,
   FailingProvider,
   flowDeps,
   gatedProvider,
@@ -10,6 +11,7 @@ import {
   MemoryCredentialStore,
   MemorySettingsStore,
   MemoryStore,
+  providersOf,
   replyEvents,
   ScriptedProvider,
   testModel,
@@ -24,7 +26,7 @@ const setup = async () => {
     ...flow,
     credentials,
     settings,
-    createProvider: () => new ScriptedProvider([]),
+    providers: providersOf(() => new ScriptedProvider([])),
   };
 
   return { store, credentials, settings, clock, deps };
@@ -45,7 +47,7 @@ describe('createToi', () => {
     const { credentials, deps } = await setup();
     const toi = await createToi(deps);
 
-    const models = await toi.connect('  sk-test  ');
+    const models = await toi.connect('anthropic', '  sk-test  ');
 
     expect(models).toEqual([testModel]);
     expect(await credentials.get('anthropic')).toBe('sk-test');
@@ -54,9 +56,9 @@ describe('createToi', () => {
 
   it('não grava a Chave quando a validação falha', async () => {
     const { credentials, deps } = await setup();
-    const toi = await createToi({ ...deps, createProvider: () => new FailingProvider([]) });
+    const toi = await createToi({ ...deps, providers: providersOf(() => new FailingProvider([])) });
 
-    await expect(toi.connect('sk-bad')).rejects.toMatchObject({ code: 'invalid_credential' });
+    await expect(toi.connect('anthropic', 'sk-bad')).rejects.toMatchObject({ code: 'invalid_credential' });
 
     expect(await credentials.get('anthropic')).toBeNull();
     expect(toi.connected()).toBe(false);
@@ -66,13 +68,14 @@ describe('createToi', () => {
     const { credentials, deps } = await setup();
     const toi = await createToi({
       ...deps,
-      createProvider: (key) =>
+      providers: providersOf((key) =>
         key === 'sk-bad' ? new FailingProvider([]) : new ScriptedProvider([]),
+      ),
     });
 
-    await toi.connect('sk-good');
+    await toi.connect('anthropic', 'sk-good');
 
-    await expect(toi.connect('sk-bad')).rejects.toMatchObject({ code: 'invalid_credential' });
+    await expect(toi.connect('anthropic', 'sk-bad')).rejects.toMatchObject({ code: 'invalid_credential' });
 
     expect(await credentials.get('anthropic')).toBe('sk-good');
     expect(toi.connected()).toBe(true);
@@ -82,7 +85,7 @@ describe('createToi', () => {
     const { deps } = await setup();
     const toi = await createToi(deps);
 
-    const conversation = await toi.createConversation(testModel.id);
+    const conversation = await toi.createConversation(testModel);
     expect(conversation.title).toBe('Nova conversa');
     expect(await toi.listConversations()).toEqual([conversation]);
     expect(await toi.listMessages(conversation.id)).toEqual([]);
@@ -98,8 +101,8 @@ describe('createToi', () => {
     const { credentials, deps } = await setup();
     const toi = await createToi(deps);
 
-    await toi.connect('sk-test');
-    await toi.disconnect();
+    await toi.connect('anthropic', 'sk-test');
+    await toi.disconnect('anthropic');
 
     expect(await credentials.get('anthropic')).toBeNull();
     expect(toi.connected()).toBe(false);
@@ -125,7 +128,7 @@ describe('createToi', () => {
 
     const { provider, delta } = gatedProvider();
 
-    const toi = await createToi({ ...deps, createProvider: () => provider });
+    const toi = await createToi({ ...deps, providers: providersOf(() => provider) });
 
     const pending = toi.flow.send({ conversationId: 'c1', text: 'Pergunta', model: testModel });
     await delta;
@@ -180,7 +183,7 @@ describe('createToi', () => {
     await store.putConversation(makeConversation('c2'));
 
     const { provider, delta } = gatedProvider();
-    const toi = await createToi({ ...deps, createProvider: () => provider });
+    const toi = await createToi({ ...deps, providers: providersOf(() => provider) });
 
     const pending = toi.flow.send({ conversationId: 'c1', text: 'Pergunta', model: testModel });
     await delta;
@@ -200,7 +203,7 @@ describe('createToi', () => {
     await store.putConversation(makeConversation('c1'));
 
     const { provider, delta } = gatedProvider();
-    const toi = await createToi({ ...deps, createProvider: () => provider });
+    const toi = await createToi({ ...deps, providers: providersOf(() => provider) });
 
     const pending = toi.flow.send({ conversationId: 'c1', text: 'Pergunta', model: testModel });
     await delta;
@@ -250,7 +253,7 @@ describe('createToi', () => {
     await store.putConversation(makeConversation('c1'));
 
     const { provider, delta } = gatedProvider();
-    const tabA = await createToi({ ...deps, createProvider: () => provider });
+    const tabA = await createToi({ ...deps, providers: providersOf(() => provider) });
     const tabB = await createToi({ ...deps, owner: 'tab-b' });
 
     const pending = tabA.flow.send({ conversationId: 'c1', text: 'Pergunta', model: testModel });
@@ -274,7 +277,7 @@ describe('createToi', () => {
 
     const toi = await createToi({
       ...deps,
-      createProvider: () => new ScriptedProvider(replyEvents()),
+      providers: providersOf(() => new ScriptedProvider(replyEvents())),
     });
     await toi.flow.send({ conversationId: 'c1', text: 'Pergunta', model: testModel });
 
@@ -300,7 +303,7 @@ describe('createToi', () => {
     const toi = await createToi({
       ...deps,
       locks: new WebLocks(navigator.locks),
-      createProvider: () => provider,
+      providers: providersOf(() => provider),
     });
 
     const pending = toi.flow.send({ conversationId: 'c1', text: 'Pergunta', model: testModel });
@@ -319,10 +322,10 @@ describe('createToi', () => {
     await expect(toi.refreshModels()).rejects.toMatchObject({ code: 'not_connected' });
     expect(await toi.models()).toBeNull();
 
-    await toi.connect('sk-test');
+    await toi.connect('anthropic', 'sk-test');
     expect(await toi.models()).toEqual([testModel]);
 
-    settings.values.delete('models');
+    settings.values.delete('models:anthropic');
     expect(await toi.refreshModels()).toEqual([testModel]);
     expect(await toi.models()).toEqual([testModel]);
   });
@@ -332,10 +335,39 @@ describe('createToi', () => {
     await store.putConversation(makeConversation('c1', { updatedAt: 5 }));
     const toi = await createToi(deps);
 
-    const updated = await toi.changeModel('c1', 'claude-outro');
+    const outro = { provider: 'anthropic', id: 'claude-outro' } as const;
+    const updated = await toi.changeModel('c1', outro);
 
-    expect(updated).toMatchObject({ model: 'claude-outro', updatedAt: 5 });
-    expect(await toi.lastModel()).toBe('claude-outro');
+    expect(updated).toMatchObject({ provider: 'anthropic', model: 'claude-outro', updatedAt: 5 });
+    expect(await toi.lastModel()).toEqual(outro);
+  });
+
+  it('trocar Modelo e renomear durante o Fluxo não são desfeitos quando a resposta termina', async () => {
+    const { store, credentials, deps } = await setup();
+    await credentials.set('anthropic', 'sk-test');
+    await store.putConversation(makeConversation('c1'));
+
+    const delta = deferred();
+    const release = deferred();
+    const provider = new ScriptedProvider(async function* () {
+      yield* replyEvents().slice(0, 2);
+      delta.resolve();
+      await release.promise;
+      yield { type: 'finished' } as const;
+    });
+    const toi = await createToi({ ...deps, providers: providersOf(() => provider) });
+
+    const pending = toi.flow.send({ conversationId: 'c1', text: 'Pergunta', model: testModel });
+    await delta.promise;
+    await toi.changeModel('c1', { provider: 'anthropic', id: 'claude-outro' });
+    await toi.renameConversation('c1', 'Renomeada');
+    release.resolve();
+
+    expect((await pending).message.status).toBe('complete');
+    expect(await store.getConversation('c1')).toMatchObject({
+      model: 'claude-outro',
+      title: 'Renomeada',
+    });
   });
 
   it('subscribe recebe as Mensagens do envio até o estado final', async () => {
@@ -344,7 +376,7 @@ describe('createToi', () => {
     await store.putConversation(makeConversation('c1'));
     const toi = await createToi({
       ...deps,
-      createProvider: () => new ScriptedProvider(replyEvents('Olá')),
+      providers: providersOf(() => new ScriptedProvider(replyEvents('Olá'))),
     });
 
     const seen: Array<[string, string]> = [];

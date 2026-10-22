@@ -1,5 +1,5 @@
 import { appError } from '../domain/error';
-import type { ConversationId } from '../domain/ids';
+import type { ConversationId, ProviderId } from '../domain/ids';
 import type { ChatProvider } from '../ports/chat-provider';
 import type { Locks } from '../ports/locks';
 import { conversationWriteLocks, withLocks } from './locks';
@@ -32,8 +32,8 @@ export interface FlowControl extends Flow {
 }
 
 export interface FlowDeps extends Omit<RunDeps, 'provider'> {
-  /** Provedor atual, lido a cada `send`/`retry`; `null` sem Chave. */
-  provider: () => ChatProvider | null;
+  /** Provedor conectado, lido a cada `send`/`retry`; `null` sem Chave para ele. */
+  provider: (id: ProviderId) => ChatProvider | null;
   /** Um Fluxo por Conversa também entre abas; ver `app/locks.ts`. */
   locks: Locks;
 }
@@ -62,13 +62,15 @@ export const createFlow = (deps: FlowDeps): FlowControl => {
 
   const start = (
     conversationId: ConversationId,
+    providerId: ProviderId,
     launch: (deps: RunDeps, signal: AbortSignal) => Promise<MessageRun>,
   ): Promise<RunResult> => {
     if (current !== null || excluded(conversationId)) {
       return Promise.reject(appError('flow_busy'));
     }
 
-    const provider = currentProvider();
+    // Capturado uma vez: o Fluxo em voo nunca troca de Provedor.
+    const provider = currentProvider(providerId);
     if (provider === null) return Promise.reject(appError('not_connected'));
 
     const flight: InFlight = {
@@ -104,9 +106,13 @@ export const createFlow = (deps: FlowDeps): FlowControl => {
 
   return {
     send: (options) =>
-      start(options.conversationId, (run, signal) => startSendMessage(run, { ...options, signal })),
+      start(options.conversationId, options.model.provider, (run, signal) =>
+        startSendMessage(run, { ...options, signal }),
+      ),
     retry: (options) =>
-      start(options.conversationId, (run, signal) => startRetryMessage(run, { ...options, signal })),
+      start(options.conversationId, options.model.provider, (run, signal) =>
+        startRetryMessage(run, { ...options, signal }),
+      ),
     stop,
     flush: () => current?.run?.flush() ?? Promise.resolve(),
     active: () => current?.conversationId ?? null,

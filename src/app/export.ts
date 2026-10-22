@@ -1,5 +1,6 @@
 import type { Conversation } from '../domain/conversation';
 import type { AppErrorCode } from '../domain/error';
+import type { ProviderId } from '../domain/ids';
 import type { Message, Part } from '../domain/message';
 import type { StopReason } from '../domain/usage';
 import type { Clock } from '../ports/clock';
@@ -11,6 +12,9 @@ import type { ConversationStore } from '../ports/conversation-store';
  * o domínio quebre o mapeamento aqui em vez de mudar o arquivo em silêncio.
  * Enumerações (`StopReason`, `AppErrorCode`) vêm do domínio: acrescentar um
  * valor é compatível. Mudança incompatível sobe `version`.
+ *
+ * `provider` entrou depois da primeira versão, como campo novo: num arquivo
+ * sem ele, a Conversa e as respostas são da Anthropic.
  */
 export const HISTORY_EXPORT_FORMAT = 'toi.history';
 export const HISTORY_EXPORT_VERSION = 1;
@@ -27,6 +31,7 @@ export interface ExportedMessage {
   status: 'complete' | 'interrupted' | 'failed';
   createdAt: number;
   completedAt: number | null;
+  provider: ProviderId | null;
   model: string | null;
   usage: {
     inputTokens: number;
@@ -46,6 +51,7 @@ export interface ExportedMessage {
 export interface ExportedConversation {
   id: string;
   title: string;
+  provider: ProviderId;
   model: string;
   createdAt: number;
   updatedAt: number;
@@ -82,6 +88,7 @@ const exportMessage = (message: Message): ExportedMessage => ({
   status: message.status === 'streaming' ? 'interrupted' : message.status,
   createdAt: message.createdAt,
   completedAt: message.completedAt,
+  provider: message.provider,
   model: message.model,
   usage: message.usage && {
     inputTokens: message.usage.inputTokens,
@@ -104,6 +111,7 @@ const exportConversation = (
 ): ExportedConversation => ({
   id: conversation.id,
   title: conversation.title,
+  provider: conversation.provider,
   model: conversation.model,
   createdAt: conversation.createdAt,
   updatedAt: conversation.updatedAt,

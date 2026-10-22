@@ -15,7 +15,7 @@ import {
   type Message,
   type MessageStatus,
 } from '../domain/message';
-import type { Model } from '../domain/model';
+import { fieldsOf, type Model, type ModelRef } from '../domain/model';
 import type { ChatProvider } from '../ports/chat-provider';
 import type { Clock } from '../ports/clock';
 import type { ConversationStore } from '../ports/conversation-store';
@@ -67,7 +67,7 @@ const storageFailed = (cause: unknown): AppErrorInfo =>
 const nextSeq = (messages: Message[]): number => (messages.at(-1)?.seq ?? 0) + 1;
 
 interface AssistantRun {
-  conversation: Conversation;
+  conversationId: ConversationId;
   history: Message[];
   assistant: Message;
   model: Model;
@@ -76,7 +76,7 @@ interface AssistantRun {
 
 const runAssistant = async (
   deps: RunDeps,
-  { conversation, history, assistant, model, signal }: AssistantRun,
+  { conversationId, history, assistant, model, signal }: AssistantRun,
   flusher: Flusher<Message>,
 ): Promise<RunResult> => {
   let draft = assistant;
@@ -152,7 +152,12 @@ const runAssistant = async (
 
   if (status === 'complete') {
     try {
-      await deps.store.putConversation({ ...conversation, updatedAt: deps.clock.now() });
+      // Só `updatedAt`: Modelo e Título podem ter mudado enquanto a resposta chegava.
+      const now = deps.clock.now();
+      await deps.store.updateConversation(conversationId, (current) => ({
+        ...current,
+        updatedAt: now,
+      }));
     } catch (cause) {
       persistError ??= storageFailed(cause);
     }
@@ -186,6 +191,23 @@ const loadConversation = async (
   return { conversation, messages };
 };
 
+/** Aponta a Conversa para o Modelo do envio sobre o que está gravado, sem desfazer outra aba. */
+const aimConversation = async (
+  store: ConversationStore,
+  id: ConversationId,
+  model: ModelRef,
+  now: number,
+  title?: string,
+): Promise<void> => {
+  const updated = await store.updateConversation(id, (current) => ({
+    ...current,
+    ...fieldsOf(model),
+    title: title ?? current.title,
+    updatedAt: now,
+  }));
+  if (!updated) throw new Error(`Conversa ${id} não encontrada.`);
+};
+
 export const startSendMessage = async (
   deps: RunDeps,
   options: SendOptions,
@@ -206,6 +228,7 @@ export const startSendMessage = async (
     status: 'complete',
     createdAt: now,
     completedAt: now,
+    provider: null,
     model: null,
     usage: null,
     stopReason: null,
@@ -222,28 +245,27 @@ export const startSendMessage = async (
     status: 'streaming',
     createdAt: now,
     completedAt: null,
-    model: options.model.id,
+    ...fieldsOf(options.model),
     usage: null,
     stopReason: null,
     error: null,
     stream: leaseOf(deps.owner, now),
   };
 
-  const updated: Conversation = {
-    ...conversation,
-    model: options.model.id,
-    title: messages.length === 0 ? titleFrom(text) : conversation.title,
-    updatedAt: now,
-  };
-
-  await deps.store.putConversation(updated);
+  await aimConversation(
+    deps.store,
+    conversation.id,
+    options.model,
+    now,
+    messages.length === 0 ? titleFrom(text) : undefined,
+  );
   await deps.store.putMessage(user);
   await deps.store.putMessage(assistant);
   deps.onUpdate?.(user);
   deps.onUpdate?.(assistant);
 
   return startAssistantRun(deps, {
-    conversation: updated,
+    conversationId: conversation.id,
     history: [...messages, user],
     assistant,
     model: options.model,
@@ -271,8 +293,10 @@ export const startRetryMessage = async (
   }
 
   const now = deps.clock.now();
+  // A tentativa é do destino atual desde a primeira gravação, mesmo se falhar antes de `started`.
   const assistant: Message = {
     ...target,
+    ...fieldsOf(options.model),
     parts: [],
     status: 'streaming',
     completedAt: null,
@@ -282,14 +306,12 @@ export const startRetryMessage = async (
     stream: leaseOf(deps.owner, now),
   };
 
-  const updated: Conversation = { ...conversation, model: options.model.id, updatedAt: now };
-
-  await deps.store.putConversation(updated);
+  await aimConversation(deps.store, conversation.id, options.model, now);
   await deps.store.putMessage(assistant);
   deps.onUpdate?.(assistant);
 
   return startAssistantRun(deps, {
-    conversation: updated,
+    conversationId: conversation.id,
     history: messages.filter((message) => message.id !== target.id),
     assistant,
     model: options.model,

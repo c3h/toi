@@ -247,4 +247,38 @@ describe('sendMessage', () => {
       { role: 'user', parts: [{ type: 'text', text: 'Pergunta' }] },
     ]);
   });
+
+  it('retry grava o destino novo antes da rede, mesmo se falhar antes de started', async () => {
+    const { store, deps } = await baseDeps();
+    const first = await sendMessage(
+      { ...deps, provider: new ScriptedProvider(successEvents()) },
+      { conversationId: 'c1', text: 'Pergunta', model: testModel, signal: new AbortController().signal },
+    );
+
+    const other = { ...testModel, id: 'claude-outro' };
+    const unreachable = new ScriptedProvider(async function* (): AsyncGenerator<StreamEvent> {
+      throw new AppError('unreachable', 'Não foi possível falar com a Anthropic.');
+    });
+
+    const retried = await retryMessage(
+      { ...deps, provider: unreachable },
+      {
+        conversationId: 'c1',
+        messageId: first.message.id,
+        model: other,
+        signal: new AbortController().signal,
+      },
+    );
+
+    expect(retried.message).toMatchObject({
+      status: 'failed',
+      provider: 'anthropic',
+      model: 'claude-outro',
+    });
+    expect(await store.getMessage(first.message.id)).toMatchObject({ model: 'claude-outro' });
+    expect(await store.getConversation('c1')).toMatchObject({
+      provider: 'anthropic',
+      model: 'claude-outro',
+    });
+  });
 });

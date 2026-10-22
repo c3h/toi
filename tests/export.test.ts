@@ -21,6 +21,8 @@ describe('exportHistory', () => {
     const exported = await exportHistory({ store, clock: fixedClock(5) });
     const message = exported.conversations[0]?.messages[0];
 
+    expect(exported.conversations[0]).toMatchObject({ provider: 'anthropic' });
+    expect(message?.provider).toBe('anthropic');
     expect(message?.status).toBe('interrupted');
     expect(message).not.toHaveProperty('stream');
     expect(message?.parts).toEqual([{ type: 'text', text: 'parcial' }]);

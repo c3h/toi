@@ -1,6 +1,6 @@
 import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
-import { AnthropicProvider } from './adapters/anthropic/provider';
+import { anthropic } from './adapters/providers/anthropic/provider';
 import { createLocks } from './adapters/locks/web';
 import { DexieConversationStore } from './adapters/storage/conversations';
 import { DexieCredentialStore } from './adapters/storage/credentials';
@@ -42,7 +42,7 @@ const boot = async (): Promise<void> => {
     newId,
     owner: tabId(),
     locks: createLocks(),
-    createProvider: (apiKey) => new AnthropicProvider(apiKey),
+    providers: [anthropic],
   });
 
   // Até 300 ms de Fluxo ficam só em memória; sair da página grava o que falta.
