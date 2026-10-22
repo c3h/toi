@@ -181,22 +181,22 @@ export class MemoryStore implements ConversationStore {
 }
 
 export class MemoryCredentialStore implements CredentialStore {
-  readonly keys = new Map<ProviderId, string>();
+  readonly #keys = new Map<ProviderId, string>();
 
   async get(provider: ProviderId): Promise<string | null> {
-    return this.keys.get(provider) ?? null;
+    return this.#keys.get(provider) ?? null;
   }
 
   async set(provider: ProviderId, key: string): Promise<void> {
-    this.keys.set(provider, key);
+    this.#keys.set(provider, key);
   }
 
   async delete(provider: ProviderId): Promise<void> {
-    this.keys.delete(provider);
+    this.#keys.delete(provider);
   }
 
   async clear(): Promise<void> {
-    this.keys.clear();
+    this.#keys.clear();
   }
 }
 
@@ -352,7 +352,6 @@ export const gatedProvider = () => {
 
 interface BuiltDeps {
   store: MemoryStore;
-  settings: MemorySettingsStore;
   deps: Omit<FlowDeps, 'provider'>;
   clock: ReturnType<typeof fixedClock>;
 }
@@ -360,16 +359,14 @@ interface BuiltDeps {
 /** `FlowDeps` sem Provedor, com locks que simulam outra aba; não grava nada. */
 export const flowDeps = (store = new MemoryStore()): BuiltDeps => {
   const clock = fixedClock(50_000);
-  const settings = new MemorySettingsStore();
   let next = 0;
 
   return {
     store,
-    settings,
     clock,
     deps: {
       store,
-      settings,
+      settings: new MemorySettingsStore(),
       clock,
       estimator: { estimate: () => 1 },
       newId: () => `id-${(next += 1)}`,
