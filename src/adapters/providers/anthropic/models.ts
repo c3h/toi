@@ -3,6 +3,7 @@ import type { Clock } from '../../../ports/clock';
 import type { FetchLike } from '../../http/fetch';
 import { anthropicFetch, API_URL } from './fetch';
 import { anthropicErrors, anthropicInfo } from './info';
+import { thinkingOff } from './thinking';
 
 interface Supported {
   supported: boolean;
@@ -73,6 +74,7 @@ export async function fetchModels(
         maxTokens: model.max_tokens ?? null,
         maxInputTokens: model.max_input_tokens ?? null,
         createdAt: model.created_at ?? new Date(0).toISOString(),
+        reasoningOff: thinkingOff(model.id) !== null,
       });
     }
 

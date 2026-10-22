@@ -3,6 +3,7 @@ import { anthropicFamily } from '../src/adapters/providers/anthropic/models';
 import {
   modelFamilies,
   pickedModels,
+  titleModelOf,
   togglePick,
   type Model,
   type ModelPicks,
@@ -85,5 +86,16 @@ describe('togglePick', () => {
       'claude-haiku-5-5',
     ]);
     expect(togglePick(familyOf(sonnet5), picks, sonnet5)).toEqual(DEFAULT_PICKS);
+  });
+});
+
+describe('titleModelOf', () => {
+  const haiku = [{ provider: 'anthropic' as const, name: 'haiku' }];
+
+  it('a escolha fora do seletor não vira outro Modelo', () => {
+    const picked = [sonnet55, haiku55];
+
+    expect(titleModelOf(picked, { provider: 'anthropic', id: sonnet55.id }, haiku)).toBe(sonnet55);
+    expect(titleModelOf(picked, { provider: 'anthropic', id: opus55.id }, haiku)).toBeNull();
   });
 });

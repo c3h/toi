@@ -409,6 +409,7 @@ export const toChatRequest = async (
     model: selected.model,
     maxTokens: selected.maxTokens,
     effort: selected.effort,
+    reasoning: 'on',
     tools,
     messages: selected.messages.map((message) => ({
       role: message.role,

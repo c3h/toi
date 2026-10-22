@@ -1,5 +1,5 @@
 import { exceededLimit, type AttachmentUpload } from '../domain/attachment';
-import { titleFrom, type Conversation } from '../domain/conversation';
+import { retitle, titleFrom, type Conversation } from '../domain/conversation';
 import {
   appError,
   asAppError,
@@ -77,6 +77,8 @@ export interface RetryOptions {
 
 export interface RunResult {
   message: Message;
+  /** A Mensagem do user quando `message` é a primeira resposta da Conversa; senão `null`. */
+  opening: Message | null;
   truncated: Truncation | null;
   persistError: AppErrorInfo | null;
 }
@@ -299,7 +301,12 @@ const runAssistant = async (
     }
   }
 
-  return { message: draft, truncated, persistError };
+  return {
+    message: draft,
+    opening: history.length === 1 ? history[0]! : null,
+    truncated,
+    persistError,
+  };
 };
 
 const startAssistantRun = (deps: RunDeps, run: AssistantRun): MessageRun => {
@@ -327,14 +334,16 @@ const loadConversation = async (
   return { conversation, messages };
 };
 
-/** Aponta a Conversa para o Modelo e o Esforço do envio sobre o gravado, sem desfazer outra aba. */
+/**
+ * Aponta a Conversa para o Modelo e o Esforço do envio sobre o gravado, sem
+ * desfazer outra aba. O Título derivado não passa por cima de um renomeado.
+ */
 const aim =
   (model: ModelRef, effort: Effort, now: number, title?: string) =>
   (current: Conversation): Conversation => ({
-    ...current,
+    ...(title === undefined ? current : retitle(current, title, 'derived')),
     ...fieldsOf(model),
     effort,
-    title: title ?? current.title,
     updatedAt: now,
   });
 

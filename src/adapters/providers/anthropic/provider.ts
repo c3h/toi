@@ -8,6 +8,7 @@ import { mapAnthropicStream } from '../../protocols/anthropic-messages/stream';
 import { anthropicFetch, API_URL } from './fetch';
 import { anthropicErrors, anthropicInfo } from './info';
 import { fetchModels } from './models';
+import { thinkingOff } from './thinking';
 
 export class AnthropicProvider implements ChatProvider {
   readonly #apiKey: string;
@@ -36,7 +37,12 @@ export class AnthropicProvider implements ChatProvider {
       {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify(await toAnthropicPayload(request)),
+        body: JSON.stringify(
+          await toAnthropicPayload(
+            request,
+            request.reasoning === 'off' ? thinkingOff(request.model) : null,
+          ),
+        ),
         signal,
       },
       this.#clock,

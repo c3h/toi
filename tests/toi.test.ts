@@ -1,10 +1,12 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { WebLocks } from '../src/adapters/locks/web';
 import type { HistoryExport } from '../src/app/export';
 import { createToi, type ToiDeps } from '../src/app/toi';
 import { tinyfishInfo } from '../src/adapters/services/tinyfish/info';
 import { appError } from '../src/domain/error';
 import { DEFAULT_TOOL_SPACE } from '../src/domain/web';
+import type { StreamEvent } from '../src/domain/stream';
+import type { ChatProvider, ChatRequest } from '../src/ports/chat-provider';
 import type { ServiceAdapter } from '../src/ports/web-tools';
 import {
   deferred,
@@ -13,6 +15,7 @@ import {
   flowDeps,
   gatedProvider,
   makeConversation,
+  makeModel,
   MemoryCredentialStore,
   MemorySettingsStore,
   MemoryStore,
@@ -21,6 +24,7 @@ import {
   ScriptedProvider,
   sendInput,
   testModel,
+  usage,
 } from './helpers';
 
 const setup = async () => {
@@ -334,6 +338,89 @@ describe('createToi', () => {
     expect(await store.getConversation('c1')).toMatchObject({
       model: 'claude-outro',
       title: 'Renomeada',
+    });
+  });
+
+  describe('Título gerado', () => {
+    const haiku = makeModel('claude-haiku-5-5');
+
+    /** Responde o chat com `answer` e o pedido do Título com `title`. */
+    const titling = (answer: () => StreamEvent[], title = 'Pão de fermentação natural') => {
+      const requests: ChatRequest[] = [];
+      const provider: ChatProvider = {
+        listModels: async () => [testModel, haiku],
+        async *stream(request) {
+          requests.push(request);
+          if (request.reasoning === 'on') {
+            yield* answer();
+            return;
+          }
+          yield { type: 'delta', index: 0, part: 'text', text: title };
+          yield { type: 'usage', usage: usage(1, 1), stopReason: 'end_turn' };
+          yield { type: 'finished' };
+        },
+      };
+      return { provider, titleRequests: () => requests.filter((r) => r.reasoning === 'off') };
+    };
+
+    const connected = async (provider: ChatProvider) => {
+      const { store, deps } = await setup();
+      const toi = await createToi({ ...deps, providers: providersOf(() => provider) });
+      await toi.connect('anthropic', 'sk-test');
+      return { store, toi };
+    };
+
+    it('nomeia a Conversa quando a primeira resposta termina, com o Haiku sem raciocínio', async () => {
+      const { provider, titleRequests } = titling(() => replyEvents('Você vai precisar de levain.'));
+      const { store, toi } = await connected(provider);
+      await store.putConversation(makeConversation('c1'));
+
+      await toi.flow.send(sendInput({ text: 'como faço pão?' }));
+      expect((await store.getConversation('c1'))?.title).toBe('como faço pão?');
+
+      await vi.waitFor(async () =>
+        expect(await store.getConversation('c1')).toMatchObject({
+          title: 'Pão de fermentação natural',
+          titleSource: 'generated',
+        }),
+      );
+      expect(titleRequests()).toHaveLength(1);
+      expect(titleRequests()[0]).toMatchObject({ model: haiku.id, reasoning: 'off', effort: 'low' });
+    });
+
+    it('só a primeira resposta conta: tentar de novo e o segundo envio não nomeiam', async () => {
+      let fail = true;
+      const { provider, titleRequests } = titling(() =>
+        fail ? replyEvents().slice(0, 2) : replyEvents(),
+      );
+      const { store, toi } = await connected(provider);
+      await store.putConversation(makeConversation('c1'));
+      await store.putConversation(makeConversation('c2'));
+
+      const first = await toi.flow.send(sendInput());
+      expect(first.message.status).toBe('failed');
+      fail = false;
+      await toi.flow.retry({ conversationId: 'c1', messageId: first.message.id, model: testModel, effort: 'low' });
+      await toi.flow.send(sendInput({ text: 'e agora?' }));
+
+      // A Conversa c2 serve de marco: quando ela foi nomeada, a c1 já teria pedido.
+      await toi.flow.send(sendInput({ conversationId: 'c2' }));
+      await vi.waitFor(async () =>
+        expect((await store.getConversation('c2'))?.titleSource).toBe('generated'),
+      );
+      expect(titleRequests()).toHaveLength(1);
+      expect((await store.getConversation('c1'))?.titleSource).toBe('derived');
+    });
+
+    it('renomear antes do primeiro envio mantém o nome da pessoa', async () => {
+      const { provider } = titling(() => replyEvents());
+      const { store, toi } = await connected(provider);
+      await store.putConversation(makeConversation('c1'));
+
+      await toi.renameConversation('c1', 'Meu pão');
+      await toi.flow.send(sendInput());
+
+      expect(await store.getConversation('c1')).toMatchObject({ title: 'Meu pão', titleSource: 'manual' });
     });
   });
 });

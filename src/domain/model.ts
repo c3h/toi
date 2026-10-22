@@ -17,6 +17,8 @@ export interface Model {
   maxTokens: number | null;
   maxInputTokens: number | null;
   createdAt: string;
+  /** Aceita responder sem raciocinar; o que não aceita raciocina no Esforço pedido. */
+  reasoningOff: boolean;
 }
 
 /** Identidade de um Modelo. O id sozinho colide entre Provedores. */
@@ -113,3 +115,18 @@ export const togglePick = (family: ModelFamily, picks: ModelPicks, model: Model)
     ? { families: [...picks.families, { provider: family.provider, name: family.name }], models: picks.models }
     : { families: picks.families, models: [...picks.models, refOf(model)] };
 };
+
+/**
+ * O Modelo que nomeia as Conversas, entre os do seletor: o escolhido ou, sem
+ * escolha, a versão mais recente da família que o Provedor sugere. `null`
+ * quando ele não está no seletor; nunca troca por outro em silêncio.
+ */
+export const titleModelOf = (
+  picked: Model[],
+  saved: ModelRef | null,
+  suggested: FamilyRef[],
+): Model | null =>
+  saved !== null
+    ? findModel(picked, saved)
+    : (modelFamilies(picked).find((family) => suggested.some((ref) => isFamily(family, ref)))
+        ?.models[0] ?? null);

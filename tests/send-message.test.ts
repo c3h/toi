@@ -73,6 +73,7 @@ describe('sendMessage', () => {
       model: testModel.id,
       maxTokens: 8_192,
       effort: 'low',
+      reasoning: 'on',
       messages: [{ role: 'user', parts: [{ type: 'text', text: 'Pergunta' }] }],
       tools: [],
     });

@@ -2,7 +2,15 @@ import type { Conversation } from '../domain/conversation';
 import { appError } from '../domain/error';
 import type { AttachmentId, ConversationId, ProviderId, ServiceId } from '../domain/ids';
 import type { Message } from '../domain/message';
-import type { Effort, Model, ModelPicks, ModelRef } from '../domain/model';
+import {
+  pickedModels,
+  titleModelOf,
+  type Effort,
+  type FamilyRef,
+  type Model,
+  type ModelPicks,
+  type ModelRef,
+} from '../domain/model';
 import type { ToolSpace } from '../domain/web';
 import type { ChatProvider, ProviderAdapter, ProviderInfo } from '../ports/chat-provider';
 import type { CredentialStore } from '../ports/credential-store';
@@ -19,6 +27,7 @@ import { eraseAll, eraseConversations } from './erase';
 import { exportHistory } from './export';
 import { createFlow, type Flow, type FlowDeps } from './flow';
 import { conversationWriteLocks, historyEraseLocks, withLocks } from './locks';
+import { firstExchange, nameConversation, type FirstExchange } from './name-conversation';
 import { recoverInterrupted } from './recover-interrupted';
 import { readToolSpace } from './web-tools';
 
@@ -41,6 +50,10 @@ export interface ToiDeps extends Omit<FlowDeps, 'provider' | 'tools' | 'onUpdate
  * `flow` é estável: trocar uma Chave troca o Provedor por dentro. Sem Chave
  * para o Provedor do Modelo, `send`/`retry` recusam com `not_connected`. Com
  * Chave de um Serviço, o envio oferece as Ferramentas dele; sem, não oferece.
+ *
+ * Quando a primeira resposta de uma Conversa termina `complete`, a aba que a
+ * enviou pede o Título ao Modelo do Título, fora do Fluxo e do lock da
+ * Conversa; ver `app/name-conversation.ts`.
  */
 export interface Toi {
   readonly flow: Flow;
@@ -77,6 +90,12 @@ export interface Toi {
   toolSpace(): Promise<ToolSpace>;
   /** Vale a partir do próximo envio, também em outra aba. */
   saveToolSpace(space: ToolSpace): Promise<void>;
+  /** A escolha gravada; `null` até a pessoa escolher, e então vale a família de `titleFamilies`. */
+  titleModel(): Promise<ModelRef | null>;
+  /** A família que cada Provedor registrado sugere para o Título. */
+  titleFamilies(): FamilyRef[];
+  /** Vale a partir da próxima Conversa nomeada, também em outra aba. */
+  saveTitleModel(model: ModelRef): Promise<void>;
   /** Troca o Modelo da Conversa e passa a ser o default das próximas. */
   changeModel(id: ConversationId, model: ModelRef): Promise<Conversation | null>;
   /** Troca o Esforço da Conversa e passa a ser o default das próximas. */
@@ -109,7 +128,7 @@ export const createToi = async (deps: ToiDeps): Promise<Toi> => {
   const serviceConnections = new Map<ServiceId, WebTools>();
   const listeners = new Set<(message: Message) => void>();
 
-  const flow = createFlow({
+  const control = createFlow({
     ...deps,
     provider: (id) => connections.get(id) ?? null,
     // Um Serviço por vez: o primeiro conectado executa as Ferramentas.
@@ -146,12 +165,72 @@ export const createToi = async (deps: ToiDeps): Promise<Toi> => {
     recoverInterrupted(deps),
   ]);
 
+  const titleFamilies: FamilyRef[] = deps.providers.map(({ info }) => ({
+    provider: info.id,
+    name: info.titleFamily,
+  }));
+
+  // Uma tentativa de Título por Conversa, cancelada quando a Conversa ou a Chave sai.
+  const naming = new Map<ConversationId, { provider: ProviderId; controller: AbortController }>();
+
+  const stopNaming = (matches: (id: ConversationId, provider: ProviderId) => boolean): void => {
+    for (const [id, task] of naming) {
+      if (!matches(id, task.provider)) continue;
+      task.controller.abort();
+      naming.delete(id);
+    }
+  };
+
+  const modelPicks = async (): Promise<ModelPicks> =>
+    (await deps.settings.modelPicks()) ?? defaultPicks;
+
+  const cachedModels = async (): Promise<Model[] | null> => {
+    if (connections.size === 0) return null;
+    const lists = await readCachedModels([...connections.keys()]);
+    return lists.every((list): list is Model[] => list !== null) ? lists.flat() : null;
+  };
+
+  /** O Modelo do Título entre os do seletor; `null` quando ele saiu de lá. */
+  const resolveTitleModel = async (): Promise<Model | null> => {
+    const [models, picks, saved] = await Promise.all([
+      cachedModels(),
+      modelPicks(),
+      deps.settings.titleModel(),
+    ]);
+    return models === null ? null : titleModelOf(pickedModels(models, picks), saved, titleFamilies);
+  };
+
+  /** Sem Modelo do Título, sem Chave ou com qualquer falha, fica o Título derivado. */
+  const requestTitle = async (exchange: FirstExchange) => {
+    const model = await resolveTitleModel().catch(() => null);
+    const provider = model === null ? undefined : connections.get(model.provider);
+    if (model === null || provider === undefined) return;
+
+    const controller = new AbortController();
+    naming.set(exchange.conversationId, { provider: model.provider, controller });
+    try {
+      await nameConversation(deps.store, provider, model, exchange, controller.signal);
+    } finally {
+      naming.delete(exchange.conversationId);
+    }
+  };
+
+  const flow: Flow = {
+    ...control,
+    async send(options) {
+      const result = await control.send(options);
+      const exchange = firstExchange(result);
+      if (exchange !== null) void requestTitle(exchange);
+      return result;
+    },
+  };
+
   /**
    * Para o Fluxo desta aba e segura os locks entre abas. Com `conversationId`,
    * só aquela Conversa; sem, o histórico inteiro.
    */
   const guarded = <T>(task: () => Promise<T>, conversationId?: ConversationId): Promise<T> =>
-    flow.exclusive(
+    control.exclusive(
       () =>
         withLocks(
           deps.locks,
@@ -175,11 +254,7 @@ export const createToi = async (deps: ToiDeps): Promise<Toi> => {
       };
     },
 
-    async models() {
-      if (connections.size === 0) return null;
-      const lists = await readCachedModels([...connections.keys()]);
-      return lists.every((list): list is Model[] => list !== null) ? lists.flat() : null;
-    },
+    models: cachedModels,
 
     async refreshModels(signal = new AbortController().signal) {
       if (connections.size === 0) throw appError('not_connected');
@@ -197,9 +272,7 @@ export const createToi = async (deps: ToiDeps): Promise<Toi> => {
     lastModel: () => deps.settings.lastModel(),
     lastEffort: () => deps.settings.lastEffort(),
 
-    async modelPicks() {
-      return (await deps.settings.modelPicks()) ?? defaultPicks;
-    },
+    modelPicks,
 
     defaultModelPicks: () => defaultPicks,
 
@@ -208,6 +281,12 @@ export const createToi = async (deps: ToiDeps): Promise<Toi> => {
     toolSpace: () => readToolSpace(deps.settings),
 
     saveToolSpace: (space) => deps.settings.saveToolSpace(space),
+
+    titleModel: () => deps.settings.titleModel(),
+
+    titleFamilies: () => titleFamilies,
+
+    saveTitleModel: (model) => deps.settings.saveTitleModel(model),
 
     async changeModel(id, model) {
       const [updated] = await Promise.all([
@@ -232,7 +311,10 @@ export const createToi = async (deps: ToiDeps): Promise<Toi> => {
     createConversation: (model, effort) => createConversation(deps, model, effort),
     renameConversation: (id, title) => renameConversation(deps, id, title),
 
-    deleteConversation: (id) => guarded(() => deleteConversation(deps, id), id),
+    deleteConversation(id) {
+      stopNaming((conversation) => conversation === id);
+      return guarded(() => deleteConversation(deps, id), id);
+    },
 
     async connect(providerId, apiKey, signal = new AbortController().signal) {
       const adapter = adapters.get(providerId);
@@ -246,6 +328,8 @@ export const createToi = async (deps: ToiDeps): Promise<Toi> => {
       const models = await provider.listModels(signal);
       await deps.credentials.set(providerId, key);
       connections.set(providerId, provider);
+      // O Título pendente usava a Chave anterior.
+      stopNaming((_, owner) => owner === providerId);
 
       const others = [...connections.keys()].filter((id) => id !== providerId);
       const [, cached] = await Promise.all([
@@ -256,7 +340,8 @@ export const createToi = async (deps: ToiDeps): Promise<Toi> => {
     },
 
     disconnect: (providerId) =>
-      flow.exclusive(async () => {
+      control.exclusive(async () => {
+        stopNaming((_, owner) => owner === providerId);
         await deps.credentials.delete(providerId);
         connections.delete(providerId);
       }),
@@ -278,15 +363,19 @@ export const createToi = async (deps: ToiDeps): Promise<Toi> => {
 
     // Outra aba com o Serviço segue usando a Chave até recarregar, como a do Provedor.
     disconnectService: (serviceId) =>
-      flow.exclusive(async () => {
+      control.exclusive(async () => {
         await deps.credentials.delete(serviceId);
         serviceConnections.delete(serviceId);
       }),
 
-    eraseConversations: () => guarded(() => eraseConversations(deps.store)),
+    eraseConversations() {
+      stopNaming(() => true);
+      return guarded(() => eraseConversations(deps.store));
+    },
 
-    eraseAll: () =>
-      guarded(async () => {
+    eraseAll() {
+      stopNaming(() => true);
+      return guarded(async () => {
         try {
           await eraseAll(deps);
         } finally {
@@ -294,7 +383,8 @@ export const createToi = async (deps: ToiDeps): Promise<Toi> => {
           connections.clear();
           serviceConnections.clear();
         }
-      }),
+      });
+    },
 
     async attachment(id) {
       const [blob] = await deps.store.readAttachments([id]);

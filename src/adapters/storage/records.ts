@@ -1,5 +1,5 @@
 import type { Attachment, ImageMediaType } from '../../domain/attachment';
-import type { Conversation } from '../../domain/conversation';
+import type { Conversation, TitleSource } from '../../domain/conversation';
 import type { AppErrorCode, AppErrorInfo } from '../../domain/error';
 import type { ProviderId } from '../../domain/ids';
 import type { JsonObject } from '../../domain/json';
@@ -16,6 +16,7 @@ import type { FetchFailureCode } from '../../domain/web';
 export interface ConversationRecord {
   id: string;
   title: string;
+  titleSource: TitleSource;
   provider: ProviderId;
   model: string;
   effort: Effort;
@@ -92,6 +93,7 @@ export interface MessageRecord {
 export const toConversationRecord = (conversation: Conversation): ConversationRecord => ({
   id: conversation.id,
   title: conversation.title,
+  titleSource: conversation.titleSource,
   provider: conversation.provider,
   model: conversation.model,
   effort: conversation.effort,
@@ -102,6 +104,7 @@ export const toConversationRecord = (conversation: Conversation): ConversationRe
 export const fromConversationRecord = (record: ConversationRecord): Conversation => ({
   id: record.id,
   title: record.title,
+  titleSource: record.titleSource,
   provider: record.provider,
   model: record.model,
   effort: record.effort,
@@ -264,6 +267,7 @@ export interface ModelRecord {
   maxTokens: number | null;
   maxInputTokens: number | null;
   createdAt: string;
+  reasoningOff: boolean;
 }
 
 export const toModelRecord = (model: Model): ModelRecord => ({
@@ -274,6 +278,7 @@ export const toModelRecord = (model: Model): ModelRecord => ({
   maxTokens: model.maxTokens,
   maxInputTokens: model.maxInputTokens,
   createdAt: model.createdAt,
+  reasoningOff: model.reasoningOff,
 });
 
 export const fromModelRecord = (record: ModelRecord): Model => ({
@@ -284,6 +289,7 @@ export const fromModelRecord = (record: ModelRecord): Model => ({
   maxTokens: record.maxTokens,
   maxInputTokens: record.maxInputTokens,
   createdAt: record.createdAt,
+  reasoningOff: record.reasoningOff,
 });
 
 export interface ModelRefRecord {

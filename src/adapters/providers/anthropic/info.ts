@@ -9,6 +9,7 @@ export const anthropicInfo: ProviderInfo = {
   keyPlaceholder: 'sk-ant-…',
   keysUrl: 'https://console.anthropic.com/settings/keys',
   defaultFamilies: ['sonnet', 'haiku'],
+  titleFamily: 'haiku',
 };
 
 export const anthropicErrors = anthropicMessagesErrors(anthropicInfo);
