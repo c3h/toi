@@ -9,7 +9,7 @@ test('envia e vê a resposta em Markdown', async ({ page }) => {
 
   await expect(page.locator('strong', { hasText: 'ênfase' })).toBeVisible();
   await expect(page.getByTitle('12 tokens de entrada, 8 de saída')).toBeVisible();
-  await expect(page.getByTitle(/até o texto aparecer$/)).toBeVisible();
+  await expect(page.getByTitle(/até o modelo responder$/)).toBeVisible();
   await expect(page.getByTitle(/tokens por segundo$/)).toBeVisible();
   await expect(page.getByRole('banner')).toContainText('primeira pergunta');
 });

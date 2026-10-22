@@ -11,7 +11,7 @@ interface Props {
 const FRAME_MS = 16;
 
 const mount = (text: string, status: MessageStatus) =>
-  renderHook((props?: Props) => useReveal(props!.text, props!.status), {
+  renderHook((props?: Props) => useReveal(props!.text, props!.status, 0), {
     initialProps: { text, status },
   });
 

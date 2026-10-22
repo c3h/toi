@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import { splitBlocks } from '../src/ui/blocks';
 import { keepUnchanged, mergeMessages } from '../src/ui/merge';
-import type { Message } from '../src/domain/message';
+import { domainOf, segmentsOf } from '../src/ui/segments';
+import type { Message, ToolCallPart, ToolResultPart } from '../src/domain/message';
 import { makeMessage } from './helpers';
 
 const message = (id: string, seq: number, status: Message['status'], text = ''): Message =>
@@ -77,5 +78,48 @@ describe('keepUnchanged', () => {
     const again = { ...message('m1', 1, 'failed'), completedAt: 2 };
 
     expect(keepUnchanged([failed], [again])[0]).toBe(again);
+  });
+});
+
+describe('segmentsOf', () => {
+  const call = (callId: string): ToolCallPart => ({
+    type: 'tool_call',
+    callId,
+    tool: 'web_search',
+    input: { query: callId },
+  });
+  const result: ToolResultPart = {
+    type: 'tool_result',
+    callId: 'a',
+    content: '',
+    sources: [],
+    failures: [],
+    error: null,
+  };
+
+  it('junta texto contíguo, casa chamada com resultado e esconde raciocínio', () => {
+    expect(
+      segmentsOf({
+        parts: [
+          { type: 'reasoning', text: 'pensa', signature: 'sig' },
+          { type: 'text', text: 'um' },
+          { type: 'text', text: 'dois' },
+          call('a'),
+          result,
+          call('b'),
+          { type: 'text', text: 'fim' },
+        ],
+      }),
+    ).toEqual([
+      { kind: 'text', text: 'um\n\ndois' },
+      { kind: 'tool', call: call('a'), result },
+      { kind: 'tool', call: call('b'), result: null },
+      { kind: 'text', text: 'fim' },
+    ]);
+  });
+
+  it('domainOf tira o www e devolve o texto quando não é URL', () => {
+    expect(domainOf('https://www.exemplo.com/a')).toBe('exemplo.com');
+    expect(domainOf('sem url')).toBe('sem url');
   });
 });

@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import type { ProviderInfo, Toi } from '../app/toi';
 import type { AppErrorInfo } from '../domain/error';
 import type { Model } from '../domain/model';
-import { errorInfo, lower } from './support';
+import { errorInfo, linkClass, lower } from './support';
 
 interface OnboardingProps {
   toi: Toi;
@@ -98,7 +98,7 @@ export const Onboarding = ({ toi, provider, onConnected, onCancel }: OnboardingP
               href={provider.keysUrl}
               target="_blank"
               rel="noopener noreferrer"
-              className="text-muted underline decoration-subtle underline-offset-4 hover:text-accent hover:decoration-accent"
+              className={linkClass}
             >
               console {provider.of.toLowerCase()}
             </a>

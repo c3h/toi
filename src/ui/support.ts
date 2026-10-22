@@ -8,6 +8,10 @@ export const errorInfo = (error: unknown): AppErrorInfo =>
 export const requestPersistence = (): Promise<boolean> =>
   navigator.storage.persist().catch(() => false);
 
+/** Link externo no meio da copy. */
+export const linkClass =
+  'text-muted underline decoration-subtle underline-offset-4 hover:text-accent hover:decoration-accent';
+
 const SELECTED_KEY = 'toi:selected';
 
 /** Seleção é estado da aba: sobrevive a reload, mas outra aba tem a sua. */

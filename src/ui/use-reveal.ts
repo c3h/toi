@@ -41,6 +41,8 @@ export interface Reveal {
 
 interface RevealLoop {
   track: RevealTrack;
+  /** O trecho de texto que a faixa revela. */
+  segment: number;
   latest: { text: string; intent: RevealIntent };
   frame: number;
   lastFrameAt: number;
@@ -69,13 +71,16 @@ const retargetOf = (reveal: RevealLoop, setShown: (shown: string) => void) => ()
 /**
  * Texto da Mensagem do assistant no ritmo de `ui/reveal.ts`. Um loop de rAF
  * por Mensagem enquanto há o que revelar; texto novo reaponta o loop, não o
- * reinicia, para não perder tempo de frame entre deltas.
+ * reinicia, para não perder tempo de frame entre deltas. `segment` é o trecho
+ * de texto em curso: uma chamada de Ferramenta fecha o trecho, e o seguinte
+ * recomeça do vazio, como uma resposta nova.
  */
-export const useReveal = (text: string, status: MessageStatus): Reveal => {
+export const useReveal = (text: string, status: MessageStatus, segment: number): Reveal => {
   const intent = intentOf(status);
   // Criado uma vez, não por render: quem usa re-renderiza a cada frame.
   const [reveal] = useState<RevealLoop>(() => ({
     track: startRevealTrack(text, intent),
+    segment,
     latest: { text, intent },
     frame: 0,
     lastFrameAt: 0,
@@ -88,9 +93,13 @@ export const useReveal = (text: string, status: MessageStatus): Reveal => {
 
   // Antes do paint, para uma resposta inteira nunca piscar vazia.
   useLayoutEffect(() => {
+    if (reveal.segment !== segment) {
+      reveal.segment = segment;
+      reveal.track = retargetReveal(reveal.track, '', intent, true);
+    }
     reveal.latest = { text, intent };
     retarget();
-  }, [text, intent, reveal, retarget]);
+  }, [text, intent, segment, reveal, retarget]);
 
   const revealing = intent === 'live' || shown.length < text.length;
   const idle = intent === 'live' && shown.length === text.length;

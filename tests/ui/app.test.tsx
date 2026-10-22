@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { userEvent } from 'vitest/browser';
 import { render } from 'vitest-browser-react';
 import { createToi } from '../../src/app/toi';
+import { tinyfishInfo } from '../../src/adapters/services/tinyfish/info';
 import { appError } from '../../src/domain/error';
 import type { Model } from '../../src/domain/model';
 import type { ChatProvider } from '../../src/ports/chat-provider';
@@ -10,7 +11,9 @@ import type { StreamEvent } from '../../src/domain/stream';
 import {
   deferred,
   FailingProvider,
+  FakeWebTools,
   gatedProvider,
+  hit,
   makeModel,
   MemoryCredentialStore,
   MemoryLocks,
@@ -19,23 +22,30 @@ import {
   providersOf,
   replyEvents,
   ScriptedProvider,
+  usage,
 } from '../helpers';
 
+/** Com `tools`, a Chave do Serviço já está gravada e as Ferramentas respondem por ele. */
 const mount = async (
   createProvider: (key: string) => ChatProvider,
   store = new MemoryStore(),
+  tools: FakeWebTools | null = null,
 ) => {
   sessionStorage.clear();
   let next = 0;
+  const credentials = new MemoryCredentialStore();
+  if (tools) await credentials.set('tinyfish', 'tf-test');
   const toi = await createToi({
     store,
-    credentials: new MemoryCredentialStore(),
+    credentials,
     settings: new MemorySettingsStore(),
     clock: { now: () => Date.now() },
     estimator: { estimate: () => 1, estimateAttachment: () => 1 },
     newId: () => `id-${(next += 1)}`,
     locks: new MemoryLocks(),
     providers: providersOf(createProvider),
+    services: [{ info: tinyfishInfo, create: () => tools ?? new FakeWebTools() }],
+    locale: 'pt-BR',
   });
   return render(<App toi={toi} />);
 };
@@ -66,10 +76,64 @@ describe('App', () => {
     await expect.element(screen.getByText('Primeira pergunta', { exact: true })).toBeVisible();
     await expect.element(screen.getByText('Olá')).toBeVisible();
     await expect.element(screen.getByTitle('10 tokens de entrada, 0 de saída')).toBeVisible();
-    await expect.element(screen.getByTitle(/até o texto aparecer$/)).toBeVisible();
+    await expect.element(screen.getByTitle(/até o modelo responder$/)).toBeVisible();
     await expect
       .element(screen.getByRole('button', { name: 'primeira pergunta', exact: true }))
       .toHaveAttribute('aria-current', 'page');
+  });
+
+  it('mostra a Busca na resposta e abre as Fontes', async () => {
+    const tools = new FakeWebTools();
+    tools.searchAnswer = { hits: [hit('https://www.exemplo.com/cobre', 'Cobre hoje')] };
+    let rounds = 0;
+    const provider = new ScriptedProvider(async function* (): AsyncGenerator<StreamEvent> {
+      rounds += 1;
+      yield { type: 'started', model: 'claude-test', usage: usage(10, 0) };
+      if (rounds === 1) {
+        yield {
+          type: 'part_started',
+          index: 0,
+          part: { type: 'tool_call', callId: 't1', tool: 'web_search' },
+        };
+        yield { type: 'delta', index: 0, part: 'input', text: '{"query":"cobre"}' };
+        yield { type: 'part_finished', index: 0 };
+        yield { type: 'usage', usage: usage(10, 3), stopReason: 'tool_use' };
+      } else {
+        yield { type: 'delta', index: 0, part: 'text', text: 'O cobre subiu.' };
+        yield { type: 'usage', usage: usage(10, 4), stopReason: 'end_turn' };
+      }
+      yield { type: 'finished' };
+    });
+    const screen = await mount(() => provider, new MemoryStore(), tools);
+    await connect(screen);
+
+    await userEvent.fill(screen.getByLabelText('mensagem'), 'Cobre hoje?');
+    await userEvent.keyboard('{Enter}');
+
+    await expect.element(screen.getByText('O cobre subiu.')).toBeVisible();
+    const row = screen.getByRole('button', { name: /buscou “cobre”.*1 fonte/ });
+    await expect.element(row).toHaveAttribute('aria-expanded', 'false');
+    await userEvent.click(row);
+    await expect
+      .element(screen.getByRole('link', { name: /exemplo\.com.*Cobre hoje/ }))
+      .toHaveAttribute('href', 'https://www.exemplo.com/cobre');
+  });
+
+  it('o espaço da busca começa no padrão e guarda a escolha', async () => {
+    const screen = await mount(
+      () => new ScriptedProvider(replyEvents()),
+      new MemoryStore(),
+      new FakeWebTools(),
+    );
+    await connect(screen);
+
+    await userEvent.click(screen.getByRole('button', { name: /configurações/ }));
+    const group = screen.getByRole('group', { name: 'espaço por resposta' });
+    await expect.element(group.getByRole('radio', { name: /40 mil · padrão/ })).toBeChecked();
+
+    await userEvent.click(group.getByRole('radio', { name: /80 mil/ }));
+
+    await expect.element(group.getByRole('radio', { name: /80 mil/ })).toBeChecked();
   });
 
   it('revela a resposta aos poucos e só fecha o rodapé com ela inteira', async () => {
