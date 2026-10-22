@@ -25,9 +25,7 @@ import { Sidebar } from './Sidebar';
 import { errorInfo, isTyping, lower, requestPersistence, selection } from './support';
 import { followSystemTheme } from './theme';
 
-const Settings = lazy(() => import('./Settings'));
-
-/** Tela no lugar do Chat quando não há Modelo para conversar: o motivo e o que resolve. */
+/** Tela de bloqueio no lugar do Chat ou das Configurações: o motivo e o que resolve. */
 const Blocked = ({ message, children }: { message: string; children: ReactNode }) => (
   <div className="flex flex-1 flex-col justify-center px-4 sm:px-8">
     <div className="mx-auto w-full max-w-[44rem]">
@@ -38,6 +36,24 @@ const Blocked = ({ message, children }: { message: string; children: ReactNode }
     </div>
   </div>
 );
+
+/** Chunk das Configurações que não baixou: a aba é anterior ao último deploy, que apagou o arquivo. */
+const SettingsUnavailable = ({ onClose }: { onClose: () => void }) => (
+  <Blocked message="as configurações não carregaram. o toi pode ter sido atualizado depois que esta aba abriu.">
+    <button
+      type="button"
+      className="text-accent hover:underline"
+      onClick={() => location.reload()}
+    >
+      recarregar
+    </button>
+    <button type="button" className="text-muted hover:text-accent" onClick={onClose}>
+      voltar
+    </button>
+  </Blocked>
+);
+
+const Settings = lazy(() => import('./Settings').catch(() => ({ default: SettingsUnavailable })));
 
 const noticeFrom = (result: RunResult): Notice | null => {
   if (result.persistError) return { kind: 'not_saved' };

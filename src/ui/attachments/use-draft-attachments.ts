@@ -3,26 +3,27 @@ import { exceededLimit, type AttachmentUpload, type MessageLimit } from '../../d
 import { newId, type AttachmentId } from '../../domain/ids';
 import type { PrepareProblem } from './prepare';
 
+/** Por que um arquivo ficou fora; `not_loaded` é o chunk do preparo que não baixou. */
+export type DraftProblem = PrepareProblem | MessageLimit | 'not_loaded';
+
 /** Um Anexo no composer: preparando, pronto para enviar ou recusado, com o motivo. */
 export type DraftAttachment =
   | { id: AttachmentId; name: string; status: 'preparing' }
   | { id: AttachmentId; name: string; status: 'ready'; upload: AttachmentUpload }
-  | { id: AttachmentId; name: string; status: 'error'; problem: PrepareProblem | MessageLimit };
+  | { id: AttachmentId; name: string; status: 'error'; problem: DraftProblem };
 
-type Prepared = { upload: AttachmentUpload } | { problem: PrepareProblem };
+type Prepared = { upload: AttachmentUpload } | { problem: Exclude<DraftProblem, MessageLimit> };
 
 /** O preparo (canvas, contagem de páginas) só baixa no primeiro Anexo. */
 const prepare = async (file: File, id: AttachmentId): Promise<Prepared> => {
+  // A aba é anterior ao último deploy, ou a rede caiu: recarregar resolve os dois.
+  const loaded = await import('./prepare').catch(() => null);
+  if (loaded === null) return { problem: 'not_loaded' };
   try {
-    const { prepareAttachment, PrepareError } = await import('./prepare');
-    try {
-      return { upload: await prepareAttachment(file, id) };
-    } catch (error) {
-      if (error instanceof PrepareError) return { problem: error.problem };
-      throw error;
-    }
-  } catch {
-    // Chunk que não baixou ou API do navegador que falhou: o arquivo só não entra.
+    return { upload: await loaded.prepareAttachment(file, id) };
+  } catch (error) {
+    if (error instanceof loaded.PrepareError) return { problem: error.problem };
+    // API do navegador que falhou: o arquivo só não entra.
     return { problem: 'unreadable' };
   }
 };
