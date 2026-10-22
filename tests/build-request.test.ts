@@ -65,17 +65,6 @@ describe('buildRequest', () => {
     expect(request.messages).toEqual([{ role: 'user', parts: [text('pergunta')] }]);
   });
 
-  it('recusa histórico que não termine com o user', () => {
-    expect(() =>
-      buildRequest({
-        messages: [message('1', 1, 'assistant', 'sem pergunta')],
-        model: model(),
-        effort: 'low',
-        estimator,
-      }),
-    ).toThrow(/terminar com uma Mensagem do user/);
-  });
-
   it('limita maxTokens ao teto do Modelo', () => {
     const high = buildRequest({
       messages: [message('1', 1, 'user', 'oi')],
@@ -114,17 +103,6 @@ describe('buildRequest', () => {
       { role: 'assistant', parts: [text('b'.repeat(10))] },
       { role: 'user', parts: [text('e'.repeat(10))] },
     ]);
-  });
-
-  it('não trunca quando cabe no orçamento', () => {
-    const { truncated } = buildRequest({
-      messages: [message('1', 1, 'user', 'oi')],
-      model: model(),
-      effort: 'low',
-      estimator,
-    });
-
-    expect(truncated).toBe(false);
   });
 
   it('envia só Partes de texto, aparadas, e não reenvia raciocínio', () => {

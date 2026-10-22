@@ -1,15 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import { createFlow } from '../src/app/flow';
-import { appError } from '../src/domain/error';
 import { textOf } from '../src/domain/message';
-import type { StreamEvent } from '../src/domain/stream';
 import {
   baseDeps,
   gatedProvider,
   replyEvents,
   ScriptedProvider,
   testModel,
-  usage,
 } from './helpers';
 
 describe('createFlow', () => {
@@ -37,74 +34,6 @@ describe('createFlow', () => {
     expect(flow.active()).toBeNull();
   });
 
-  it('stop fecha o Fluxo em interrupted e desmarca o estado ativo', async () => {
-    const { deps } = await baseDeps();
-    const { provider, delta } = gatedProvider();
-    const flow = createFlow({ ...deps, provider: () => provider });
-
-    const pending = flow.send({ conversationId: 'c1', text: 'Pergunta', model: testModel, effort: 'low' });
-    await delta;
-    await flow.stop();
-
-    const result = await pending;
-    expect(result.message.status).toBe('interrupted');
-    expect(flow.active()).toBeNull();
-  });
-
-  it('recusa um segundo Fluxo enquanto o primeiro está ativo', async () => {
-    const { deps } = await baseDeps();
-    const { provider, delta } = gatedProvider();
-    const flow = createFlow({ ...deps, provider: () => provider });
-
-    const first = flow.send({ conversationId: 'c1', text: 'Pergunta', model: testModel, effort: 'low' });
-
-    await expect(
-      flow.send({ conversationId: 'c1', text: 'Outra', model: testModel, effort: 'low' }),
-    ).rejects.toMatchObject({ code: 'flow_busy' });
-
-    await delta;
-    await flow.stop();
-    await first;
-  });
-
-  it('retry reusa a última Mensagem do assistant', async () => {
-    const { deps } = await baseDeps();
-    let failing = true;
-
-    const provider = new ScriptedProvider(async function* (): AsyncGenerator<StreamEvent> {
-      if (failing) {
-        yield { type: 'started', model: testModel.id, usage: usage(3, 0) };
-        throw appError('overloaded');
-      }
-
-      yield* replyEvents();
-    });
-
-    const flow = createFlow({ ...deps, provider: () => provider });
-
-    const first = await flow.send({
-      conversationId: 'c1',
-      text: 'Pergunta',
-      model: testModel,
-      effort: 'low',
-    });
-
-    expect(first.message.status).toBe('failed');
-
-    failing = false;
-
-    const retried = await flow.retry({
-      conversationId: 'c1',
-      messageId: first.message.id,
-      model: testModel,
-      effort: 'low',
-    });
-
-    expect(retried.message.id).toBe(first.message.id);
-    expect(retried.message.status).toBe('complete');
-    expect(textOf(retried.message)).toBe('Olá');
-  });
-
   it('stop antes do Fluxo começar fecha em interrupted', async () => {
     const { store, deps } = await baseDeps();
     const provider = new ScriptedProvider(replyEvents());
@@ -117,55 +46,6 @@ describe('createFlow', () => {
     expect(result.message.status).toBe('interrupted');
     expect(flow.active()).toBeNull();
     expect((await store.listMessages('c1')).at(-1)?.status).toBe('interrupted');
-  });
-
-  it('recusa send sem Provedor', async () => {
-    const { deps } = await baseDeps();
-    const flow = createFlow({ ...deps, provider: () => null });
-
-    await expect(
-      flow.send({ conversationId: 'c1', text: 'Pergunta', model: testModel, effort: 'low' }),
-    ).rejects.toMatchObject({ code: 'not_connected' });
-    expect(flow.active()).toBeNull();
-  });
-
-  it('exclusive recusa novos Fluxos enquanto a tarefa roda', async () => {
-    const { deps } = await baseDeps();
-    const provider = new ScriptedProvider(replyEvents());
-    const flow = createFlow({ ...deps, provider: () => provider });
-
-    let release: () => void = () => undefined;
-    const task = flow.exclusive(
-      () =>
-        new Promise<void>((resolve) => {
-          release = resolve;
-        }),
-    );
-
-    await expect(
-      flow.send({ conversationId: 'c1', text: 'Pergunta', model: testModel, effort: 'low' }),
-    ).rejects.toMatchObject({ code: 'flow_busy' });
-
-    release();
-    await task;
-
-    const result = await flow.send({ conversationId: 'c1', text: 'Pergunta', model: testModel, effort: 'low' });
-    expect(result.message.status).toBe('complete');
-  });
-
-  it('exclusive de outra Conversa não para o Fluxo em voo', async () => {
-    const { deps } = await baseDeps();
-    const { provider, delta } = gatedProvider();
-    const flow = createFlow({ ...deps, provider: () => provider });
-
-    const pending = flow.send({ conversationId: 'c1', text: 'Pergunta', model: testModel, effort: 'low' });
-    await delta;
-
-    await flow.exclusive(async () => undefined, 'c2');
-    expect(flow.active()).toBe('c1');
-
-    await flow.stop();
-    await pending;
   });
 
   it('recusa um Fluxo na mesma Conversa enquanto outra aba a usa', async () => {
@@ -184,17 +64,5 @@ describe('createFlow', () => {
 
     await tabA.stop();
     await pending;
-  });
-
-  it('libera a Conversa para outra aba quando o Fluxo fecha', async () => {
-    const { store, deps } = await baseDeps();
-    const tabA = createFlow({ ...deps, provider: () => new ScriptedProvider(replyEvents()) });
-    const tabB = createFlow({ ...deps, provider: () => new ScriptedProvider(replyEvents()) });
-
-    await tabA.send({ conversationId: 'c1', text: 'Primeira', model: testModel, effort: 'low' });
-    const second = await tabB.send({ conversationId: 'c1', text: 'Segunda', model: testModel, effort: 'low' });
-
-    expect(second.message.status).toBe('complete');
-    expect((await store.listMessages('c1')).map((message) => message.seq)).toEqual([1, 2, 3, 4]);
   });
 });

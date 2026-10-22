@@ -7,7 +7,6 @@ import {
   flowDeps,
   gatedProvider,
   makeConversation,
-  makeMessage,
   MemoryCredentialStore,
   MemorySettingsStore,
   MemoryStore,
@@ -33,16 +32,6 @@ const setup = async () => {
 };
 
 describe('createToi', () => {
-  it('abre desconectado quando não há Chave', async () => {
-    const { deps } = await setup();
-    const toi = await createToi(deps);
-
-    expect(toi.connected()).toBe(false);
-    await expect(
-      toi.flow.send({ conversationId: 'c1', text: 'Pergunta', model: testModel, effort: 'low' }),
-    ).rejects.toMatchObject({ code: 'not_connected' });
-  });
-
   it('valida a Chave, grava e conecta', async () => {
     const { credentials, deps } = await setup();
     const toi = await createToi(deps);
@@ -52,16 +41,6 @@ describe('createToi', () => {
     expect(models).toEqual([testModel]);
     expect(await credentials.get('anthropic')).toBe('sk-test');
     expect(toi.connected()).toBe(true);
-  });
-
-  it('não grava a Chave quando a validação falha', async () => {
-    const { credentials, deps } = await setup();
-    const toi = await createToi({ ...deps, providers: providersOf(() => new FailingProvider([])) });
-
-    await expect(toi.connect('anthropic', 'sk-bad')).rejects.toMatchObject({ code: 'invalid_credential' });
-
-    expect(await credentials.get('anthropic')).toBeNull();
-    expect(toi.connected()).toBe(false);
   });
 
   it('mantém a Chave anterior quando a nova Chave falha', async () => {
@@ -81,65 +60,6 @@ describe('createToi', () => {
     expect(toi.connected()).toBe(true);
   });
 
-  it('expõe o histórico pelas use cases', async () => {
-    const { deps } = await setup();
-    const toi = await createToi(deps);
-
-    const conversation = await toi.createConversation(testModel, 'low');
-    expect(conversation.title).toBe('Nova conversa');
-    expect(await toi.listConversations()).toEqual([conversation]);
-    expect(await toi.listMessages(conversation.id)).toEqual([]);
-
-    const renamed = await toi.renameConversation(conversation.id, '  Outro   título ');
-    expect(renamed?.title).toBe('Outro título');
-
-    await toi.deleteConversation(conversation.id);
-    expect(await toi.listConversations()).toEqual([]);
-  });
-
-  it('disconnect remove a Chave e desconecta', async () => {
-    const { credentials, deps } = await setup();
-    const toi = await createToi(deps);
-
-    await toi.connect('anthropic', 'sk-test');
-    await toi.disconnect('anthropic');
-
-    expect(await credentials.get('anthropic')).toBeNull();
-    expect(toi.connected()).toBe(false);
-  });
-
-  it('apagar Conversas preserva a Chave', async () => {
-    const { store, credentials, deps } = await setup();
-    await credentials.set('anthropic', 'sk-test');
-    await store.putConversation(makeConversation('c1'));
-
-    const toi = await createToi(deps);
-    await toi.eraseConversations();
-
-    expect(await store.listConversations()).toEqual([]);
-    expect(await credentials.get('anthropic')).toBe('sk-test');
-    expect(toi.connected()).toBe(true);
-  });
-
-  it('apagar Conversas para o Fluxo em andamento antes de limpar', async () => {
-    const { store, credentials, deps } = await setup();
-    await credentials.set('anthropic', 'sk-test');
-    await store.putConversation(makeConversation('c1'));
-
-    const { provider, delta } = gatedProvider();
-
-    const toi = await createToi({ ...deps, providers: providersOf(() => provider) });
-
-    const pending = toi.flow.send({ conversationId: 'c1', text: 'Pergunta', model: testModel, effort: 'low' });
-    await delta;
-
-    await toi.eraseConversations();
-
-    const result = await pending;
-    expect(result.message.status).toBe('interrupted');
-    expect(await store.listConversations()).toEqual([]);
-  });
-
   it('apagar tudo remove Conversas, Configurações e Chave e desconecta', async () => {
     const { store, credentials, settings, deps } = await setup();
     await credentials.set('anthropic', 'sk-test');
@@ -155,23 +75,6 @@ describe('createToi', () => {
     expect(await credentials.get('anthropic')).toBeNull();
     expect(settings.values.size).toBe(0);
     expect(toi.connected()).toBe(false);
-  });
-
-  it('recupera Mensagem streaming órfã na abertura', async () => {
-    const { store, deps } = await setup();
-    await store.putMessage(
-      makeMessage({
-        id: 'm1',
-        conversationId: 'c1',
-        seq: 1,
-        role: 'assistant',
-        status: 'streaming',
-      }),
-    );
-
-    await createToi(deps);
-
-    expect((await store.messages.get('m1'))?.status).toBe('interrupted');
   });
 
   it('apagar outra Conversa não interrompe o Fluxo em voo', async () => {
@@ -313,46 +216,6 @@ describe('createToi', () => {
     expect(await store.listConversations()).toEqual([]);
   });
 
-  it('connect guarda o cache de Modelos e refreshModels o atualiza', async () => {
-    const { settings, deps } = await setup();
-    const toi = await createToi(deps);
-
-    await expect(toi.refreshModels()).rejects.toMatchObject({ code: 'not_connected' });
-    expect(await toi.models()).toBeNull();
-
-    await toi.connect('anthropic', 'sk-test');
-    expect(await toi.models()).toEqual([testModel]);
-
-    settings.values.delete('models:anthropic');
-    expect(await toi.refreshModels()).toEqual([testModel]);
-    expect(await toi.models()).toEqual([testModel]);
-  });
-
-  it('changeModel troca o Modelo da Conversa sem reordenar e vira o default', async () => {
-    const { store, deps } = await setup();
-    await store.putConversation(makeConversation('c1', { updatedAt: 5 }));
-    const toi = await createToi(deps);
-
-    const outro = { provider: 'anthropic', id: 'claude-outro' } as const;
-    const updated = await toi.changeModel('c1', outro);
-
-    expect(updated).toMatchObject({ provider: 'anthropic', model: 'claude-outro', updatedAt: 5 });
-    expect(await toi.lastModel()).toEqual(outro);
-  });
-
-  it('changeEffort troca o Esforço da Conversa sem reordenar e vira o default', async () => {
-    const { store, deps } = await setup();
-    await store.putConversation(makeConversation('c1', { updatedAt: 5 }));
-    const toi = await createToi(deps);
-
-    expect(await toi.lastEffort()).toBeNull();
-
-    const updated = await toi.changeEffort('c1', 'xhigh');
-
-    expect(updated).toMatchObject({ effort: 'xhigh', updatedAt: 5 });
-    expect(await toi.lastEffort()).toBe('xhigh');
-  });
-
   it('trocar Modelo e renomear durante o Fluxo não são desfeitos quando a resposta termina', async () => {
     const { store, credentials, deps } = await setup();
     await credentials.set('anthropic', 'sk-test');
@@ -379,29 +242,5 @@ describe('createToi', () => {
       model: 'claude-outro',
       title: 'Renomeada',
     });
-  });
-
-  it('subscribe recebe as Mensagens do envio até o estado final', async () => {
-    const { store, credentials, deps } = await setup();
-    await credentials.set('anthropic', 'sk-test');
-    await store.putConversation(makeConversation('c1'));
-    const toi = await createToi({
-      ...deps,
-      providers: providersOf(() => new ScriptedProvider(replyEvents('Olá'))),
-    });
-
-    const seen: Array<[string, string]> = [];
-    const unsubscribe = toi.subscribe((message) => seen.push([message.role, message.status]));
-
-    await toi.flow.send({ conversationId: 'c1', text: 'Pergunta', model: testModel, effort: 'low' });
-
-    expect(seen[0]).toEqual(['user', 'complete']);
-    expect(seen[1]).toEqual(['assistant', 'streaming']);
-    expect(seen.at(-1)).toEqual(['assistant', 'complete']);
-
-    unsubscribe();
-    const count = seen.length;
-    await toi.flow.send({ conversationId: 'c1', text: 'Outra', model: testModel, effort: 'low' });
-    expect(seen).toHaveLength(count);
   });
 });

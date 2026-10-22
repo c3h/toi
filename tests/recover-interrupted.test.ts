@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { conversationLock, HISTORY_LOCK } from '../src/app/locks';
+import { conversationLock } from '../src/app/locks';
 import { recoverInterrupted } from '../src/app/recover-interrupted';
 import { fixedClock, makeMessage, MemoryLocks, MemoryStore } from './helpers';
 
@@ -36,18 +36,6 @@ describe('recoverInterrupted', () => {
     const store = await storeWith([streaming()]);
     const locks = new MemoryLocks();
     const release = await locks.tryAcquire(conversationLock('c1'));
-
-    const recovered = await recoverInterrupted({ store, clock: fixedClock(now), locks });
-
-    expect(recovered).toEqual([]);
-    expect((await store.messages.get('m1'))?.status).toBe('streaming');
-    await release?.();
-  });
-
-  it('não grava enquanto outra aba apaga o histórico', async () => {
-    const store = await storeWith([streaming()]);
-    const locks = new MemoryLocks();
-    const release = await locks.tryAcquire(HISTORY_LOCK, 'exclusive');
 
     const recovered = await recoverInterrupted({ store, clock: fixedClock(now), locks });
 

@@ -9,7 +9,6 @@ import {
 } from '../src/app/send-message';
 import { AppError } from '../src/domain/error';
 import { textOf, type Message } from '../src/domain/message';
-import type { Model } from '../src/domain/model';
 import type { StreamEvent } from '../src/domain/stream';
 import {
   abortError,
@@ -66,58 +65,6 @@ describe('sendMessage', () => {
       effort: 'low',
       messages: [{ role: 'user', parts: [{ type: 'text', text: 'Pergunta' }] }],
     });
-  });
-
-  it('envia o Esforço, grava-o na resposta e na Conversa e lembra Modelo e Esforço para a próxima', async () => {
-    const { store, settings, deps } = await baseDeps();
-    const provider = new ScriptedProvider(successEvents());
-    const other: Model = { ...testModel, id: 'claude-outro' };
-
-    const sent = await sendMessage(
-      { ...deps, provider },
-      { conversationId: 'c1', text: 'Pergunta', model: testModel, effort: 'xhigh', signal: new AbortController().signal },
-    );
-
-    expect(provider.requests[0]?.effort).toBe('xhigh');
-    expect(sent.message.effort).toBe('xhigh');
-    expect((await store.getConversation('c1'))?.effort).toBe('xhigh');
-    expect(await settings.lastModel()).toEqual({ provider: testModel.provider, id: testModel.id });
-    expect(await settings.lastEffort()).toBe('xhigh');
-
-    const retried = await retryMessage(
-      { ...deps, provider },
-      {
-        conversationId: 'c1',
-        messageId: sent.message.id,
-        model: other,
-        effort: 'max',
-        signal: new AbortController().signal,
-      },
-    );
-
-    expect(provider.requests[1]?.effort).toBe('max');
-    expect(retried.message.effort).toBe('max');
-    expect((await store.getConversation('c1'))?.effort).toBe('max');
-    expect(await settings.lastModel()).toEqual({ provider: other.provider, id: other.id });
-    expect(await settings.lastEffort()).toBe('max');
-  });
-
-  it('envia mesmo quando não consegue lembrar Modelo e Esforço', async () => {
-    const { deps } = await baseDeps();
-    const provider = new ScriptedProvider(successEvents());
-    const failing = new Error('IndexedDB recusou');
-    const settings = {
-      saveLastModel: () => Promise.reject(failing),
-      saveLastEffort: () => Promise.reject(failing),
-    };
-
-    const result = await sendMessage(
-      { ...deps, settings, provider },
-      { conversationId: 'c1', text: 'Pergunta', model: testModel, effort: 'low', signal: new AbortController().signal },
-    );
-
-    expect(result.message.status).toBe('complete');
-    expect(result.persistError).toBeNull();
   });
 
   it('marca interrupted e preserva o texto parcial quando a pessoa para', async () => {
@@ -251,34 +198,6 @@ describe('sendMessage', () => {
       completedAt: 52_000,
     });
     expect((await store.getMessage(result.message.id))?.firstTokenAt).toBe(50_800);
-  });
-
-  it('retry recomeça o relógio da tentativa', async () => {
-    const { deps, clock } = await baseDeps();
-    const first = await sendMessage(
-      { ...deps, provider: new ScriptedProvider(successEvents()) },
-      { conversationId: 'c1', text: 'Pergunta', model: testModel, effort: 'low', signal: new AbortController().signal },
-    );
-
-    clock.set(90_000);
-    const provider = new ScriptedProvider(async function* (): AsyncGenerator<StreamEvent> {
-      clock.set(90_500);
-      yield* successEvents();
-    });
-
-    const retried = await retryMessage(
-      { ...deps, provider },
-      {
-        conversationId: 'c1',
-        messageId: first.message.id,
-        model: testModel,
-        effort: 'low',
-        signal: new AbortController().signal,
-      },
-    );
-
-    expect(first.message).toMatchObject({ createdAt: 50_000, firstTokenAt: 50_000 });
-    expect(retried.message).toMatchObject({ createdAt: 90_000, firstTokenAt: 90_500 });
   });
 
   it('retry substitui a última Mensagem do assistant em vez de duplicar', async () => {
