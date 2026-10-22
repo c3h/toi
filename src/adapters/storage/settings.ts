@@ -1,5 +1,6 @@
 import type { ProviderId } from '../../domain/ids';
 import type { Effort, Model, ModelPicks, ModelRef } from '../../domain/model';
+import type { ToolSpace } from '../../domain/web';
 import type { SettingsStore } from '../../ports/settings-store';
 import type { ToiDatabase } from './db';
 import {
@@ -18,6 +19,7 @@ const modelsKey = (provider: ProviderId): string => `models:${provider}`;
 const LAST_MODEL_KEY = 'lastModel';
 const LAST_EFFORT_KEY = 'lastEffort';
 const MODEL_PICKS_KEY = 'modelPicks';
+const TOOL_SPACE_KEY = 'toolSpace';
 
 export class DexieSettingsStore implements SettingsStore {
   readonly #db: ToiDatabase;
@@ -60,6 +62,15 @@ export class DexieSettingsStore implements SettingsStore {
 
   async saveModelPicks(picks: ModelPicks): Promise<void> {
     await this.#db.settings.put({ key: MODEL_PICKS_KEY, value: toModelPicksRecord(picks) });
+  }
+
+  async toolSpace(): Promise<ToolSpace | null> {
+    const row = await this.#db.settings.get(TOOL_SPACE_KEY);
+    return row ? (row.value as ToolSpace) : null;
+  }
+
+  async saveToolSpace(space: ToolSpace): Promise<void> {
+    await this.#db.settings.put({ key: TOOL_SPACE_KEY, value: space });
   }
 
   async clear(): Promise<void> {
