@@ -10,13 +10,13 @@
 
 - `src/domain` não importa React, Dexie nem `fetch`.
 - Toda chamada de rede vive em `src/adapters`.
-- A UI não conhece detalhes de nenhum Provedor.
-- Nenhum dado é enviado a lugar nenhum além de `api.anthropic.com`.
+- A UI não conhece detalhes de nenhum Provedor ou Serviço.
+- Dado sai só para `api.anthropic.com` e, com a Chave da TinyFish gravada, para `api.search.tinyfish.ai` e `api.fetch.tinyfish.ai` ([ADR 0010](docs/adr/0010-web-tools-via-tinyfish.md)).
 
 ## Proibido sem decisão explícita
 
 - telemetria, analytics, fonte ou script de terceiro;
-- segundo Provedor;
+- segundo Provedor ou Serviço;
 - backend, login ou sincronização;
 - guardar a Chave fora do store `credentials`.
 

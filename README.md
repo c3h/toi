@@ -1,6 +1,6 @@
 # Toi
 
-Chat local-first com modelos da Anthropic. Abra, cole sua Chave, converse. O histórico fica no navegador e a única saída de dados é a Conversa enviada à Anthropic para gerar a resposta.
+Chat local-first com modelos da Anthropic. Abra, cole sua Chave, converse. O histórico fica no navegador; os dados só saem para a Anthropic gerar a resposta e, se você gravar a Chave da TinyFish, para a TinyFish buscar e ler páginas na web.
 
 [Abrir o Toi](https://toi.gimigliano.blog) · [Contribuir](CONTRIBUTING.md) · [MIT](LICENSE)
 

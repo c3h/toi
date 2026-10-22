@@ -13,3 +13,4 @@ O IndexedDB gravava os tipos do domínio diretamente, e a exportação congelari
 - Mudança incompatível no arquivo sobe `version`; a importação, quando existir, lê as versões anteriores.
 - Enumerações (`StopReason`, `AppErrorCode`) continuam vindo do domínio: acrescentar um valor é compatível.
 - O contrato do store verifica uma Mensagem com todos os campos na ida e na volta, contra memória e Dexie.
+- As Partes `redacted_reasoning`, `tool_call` e `tool_result` entraram no registro e na exportação como tipos novos, sem subir `version` ([ADR 0010](0010-web-tools-via-tinyfish.md)). O input de `tool_call` é JSON copiado por `structuredClone`.
