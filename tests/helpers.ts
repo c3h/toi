@@ -3,7 +3,7 @@ import type { Conversation } from '../src/domain/conversation';
 import { appError, missingAttachmentError } from '../src/domain/error';
 import type { Message, Part } from '../src/domain/message';
 import type { Effort, Model, ModelPicks, ModelRef } from '../src/domain/model';
-import type { ProviderId } from '../src/domain/ids';
+import type { CredentialOwner, ProviderId } from '../src/domain/ids';
 import type { StreamEvent } from '../src/domain/stream';
 import { emptyUsage } from '../src/domain/usage';
 import type { ChatProvider, ChatRequest, ProviderAdapter } from '../src/ports/chat-provider';
@@ -20,6 +20,8 @@ import type {
 import type { CredentialStore } from '../src/ports/credential-store';
 import type { LockMode, Locks, Release } from '../src/ports/locks';
 import type { SettingsStore } from '../src/ports/settings-store';
+import type { FetchOutcome, SearchOutcome, WebTools } from '../src/ports/web-tools';
+import type { ToolSpace } from '../src/domain/web';
 
 export const testModel: Model = {
   provider: 'anthropic',
@@ -260,18 +262,18 @@ export class MemoryStore implements ConversationStore {
 }
 
 export class MemoryCredentialStore implements CredentialStore {
-  readonly #keys = new Map<ProviderId, string>();
+  readonly #keys = new Map<CredentialOwner, string>();
 
-  async get(provider: ProviderId): Promise<string | null> {
-    return this.#keys.get(provider) ?? null;
+  async get(owner: CredentialOwner): Promise<string | null> {
+    return this.#keys.get(owner) ?? null;
   }
 
-  async set(provider: ProviderId, key: string): Promise<void> {
-    this.#keys.set(provider, key);
+  async set(owner: CredentialOwner, key: string): Promise<void> {
+    this.#keys.set(owner, key);
   }
 
-  async delete(provider: ProviderId): Promise<void> {
-    this.#keys.delete(provider);
+  async delete(owner: CredentialOwner): Promise<void> {
+    this.#keys.delete(owner);
   }
 
   async clear(): Promise<void> {
@@ -334,6 +336,14 @@ export class MemorySettingsStore implements SettingsStore {
 
   async saveModelPicks(picks: ModelPicks): Promise<void> {
     this.values.set('modelPicks', picks);
+  }
+
+  async toolSpace(): Promise<ToolSpace | null> {
+    return (this.values.get('toolSpace') as ToolSpace | undefined) ?? null;
+  }
+
+  async saveToolSpace(space: ToolSpace): Promise<void> {
+    this.values.set('toolSpace', space);
   }
 
   async clear(): Promise<void> {
@@ -431,7 +441,8 @@ export const gatedProvider = () => {
 
 interface BuiltDeps {
   store: MemoryStore;
-  deps: Omit<FlowDeps, 'provider'>;
+  /** Sem Provedor e sem Serviço: cada teste dá os dele. */
+  deps: Omit<FlowDeps, 'provider' | 'tools'>;
   clock: ReturnType<typeof fixedClock>;
 }
 
@@ -451,6 +462,7 @@ export const flowDeps = (store = new MemoryStore()): BuiltDeps => {
       newId: () => `id-${(next += 1)}`,
       flushIntervalMs: 60_000,
       locks: new MemoryLocks(),
+      locale: 'pt-BR',
     },
   };
 };
@@ -482,3 +494,36 @@ export const usage = (input: number, output: number) => ({
   inputTokens: input,
   outputTokens: output,
 });
+
+type Answer<T> = T | Error | ((signal: AbortSignal) => Promise<T>);
+
+const answer = async <T>(value: Answer<T>, signal: AbortSignal): Promise<T> => {
+  if (typeof value === 'function') return (value as (signal: AbortSignal) => Promise<T>)(signal);
+  if (value instanceof Error) throw value;
+  return value;
+};
+
+/** Um Serviço de Ferramentas que responde o que o teste mandou e guarda os pedidos. */
+export class FakeWebTools implements WebTools {
+  readonly searches: Array<{ text: string; language: string }> = [];
+  readonly fetches: string[][] = [];
+  searchAnswer: Answer<SearchOutcome> = { hits: [] };
+  fetchAnswer: Answer<FetchOutcome> = { pages: [], failures: [] };
+  verifyAnswer: Answer<void> = undefined;
+
+  async search(query: { text: string; language: string }, signal: AbortSignal): Promise<SearchOutcome> {
+    this.searches.push(query);
+    return answer(this.searchAnswer, signal);
+  }
+
+  async fetch(urls: string[], signal: AbortSignal): Promise<FetchOutcome> {
+    this.fetches.push(urls);
+    return answer(this.fetchAnswer, signal);
+  }
+
+  async verify(signal: AbortSignal): Promise<void> {
+    return answer(this.verifyAnswer, signal);
+  }
+}
+
+export const hit = (url: string, title = url) => ({ title, url, snippet: `sobre ${title}`, date: null });

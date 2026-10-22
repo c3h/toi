@@ -37,7 +37,9 @@ import { CopyButton } from './CopyButton';
 import { EffortPicker, effortLabel } from './EffortPicker';
 import { ModelPicker } from './ModelPicker';
 import { preloadMarkdown, Prose } from './Prose';
+import { segmentsOf } from './segments';
 import { formatSeconds, formatTokens, lower } from './support';
+import { ToolRow } from './ToolRow';
 import { useMessages } from './use-messages';
 import { useReveal } from './use-reveal';
 
@@ -77,16 +79,21 @@ interface ChatProps {
   onStop: () => void;
   onRetry: (message: Message) => void;
   onDismissNotice: () => void;
+  /** Abre Configurações na busca na web: a Chave do Serviço foi recusada. */
+  onOpenSearchSettings: () => void;
 }
 
-const truncationText = ({ turns, attachments }: Truncation): string => {
+const truncationText = ({ turns, attachments, results }: Truncation): string => {
+  const items = [
+    ...(attachments ? ['anexos antigos'] : []),
+    ...(results ? ['resultados de busca antigos'] : []),
+    ...(turns ? ['parte do meio da conversa'] : []),
+  ];
   const what =
-    turns && attachments
-      ? 'anexos antigos e parte do meio da conversa ficaram'
-      : attachments
-        ? 'anexos antigos ficaram'
-        : 'parte do meio da conversa ficou';
-  return `${what} fora do contexto para caber no modelo.`;
+    items.length === 1 ? items[0]! : `${items.slice(0, -1).join(', ')} e ${items.at(-1)!}`;
+  // Só "parte do meio" sozinha é singular.
+  const verb = items.length === 1 && turns ? 'ficou' : 'ficaram';
+  return `${what} ${verb} fora do contexto para caber no modelo.`;
 };
 
 const noticeText = (notice: Notice): string => {
@@ -122,7 +129,7 @@ const statsOf = (message: Message): Stat[] => {
   const timing = timingOf(message);
   if (timing) {
     const wait = formatSeconds(timing.firstTokenMs);
-    stats.push({ icon: Timer, short: wait, label: `${wait} até o texto aparecer` });
+    stats.push({ icon: Timer, short: wait, label: `${wait} até o modelo responder` });
 
     if (timing.tokensPerSecond !== null) {
       const rate = formatTokens(Math.round(timing.tokensPerSecond));
@@ -148,6 +155,7 @@ interface MessageViewProps {
   models: Model[];
   retryable: boolean;
   onRetry: (message: Message) => void;
+  onOpenSearchSettings: () => void;
 }
 
 const MessageView = memo((props: MessageViewProps) => {
@@ -169,11 +177,28 @@ const MessageView = memo((props: MessageViewProps) => {
   );
 });
 
-/** Componente próprio por causa da revelação, que a Mensagem do user não tem. */
-const Reply = ({ message, models, retryable, onRetry }: MessageViewProps) => {
+/**
+ * A resposta em trechos, na ordem: texto e chamadas de Ferramenta. Só o
+ * último trecho, se for texto, ainda revela; um trecho novo fecha o anterior
+ * sem remontar os que já estavam, e a revelação recomeça nele.
+ */
+const Reply = ({
+  message,
+  models,
+  retryable,
+  onRetry,
+  onOpenSearchSettings,
+}: MessageViewProps) => {
   // A revelação re-renderiza a cada frame, mesmo sem a Mensagem mudar.
-  const text = useMemo(() => textOf(message), [message]);
-  const { shown, revealing, waiting, animate } = useReveal(text, message.status);
+  const segments = useMemo(() => segmentsOf(message), [message]);
+  const closed = segments.at(-1)?.kind === 'text' ? segments.length - 1 : segments.length;
+  const tail = segments[closed];
+  const live = tail?.kind === 'text' ? tail.text : '';
+  const { shown, revealing, waiting, animate } = useReveal(live, message.status, closed);
+  const text = useMemo(
+    () => segments.flatMap((segment) => (segment.kind === 'text' ? [segment.text] : [])).join('\n\n'),
+    [segments],
+  );
 
   const name = modelName(message, models);
   const effort = message.effort && effortLabel(message.effort);
@@ -190,12 +215,29 @@ const Reply = ({ message, models, retryable, onRetry }: MessageViewProps) => {
       : message.status === 'interrupted'
         ? 'resposta interrompida.'
         : null;
+  // Uma Ferramenta correndo mostra o próprio estado; o cursor fica com o texto.
+  const caret = waiting && (segments.length === 0 || tail !== undefined);
 
   return (
-    <article aria-busy={revealing}>
-      <Prose text={shown} open={revealing} animate={animate} caret={waiting} />
+    <article aria-busy={revealing} className="flex flex-col gap-4">
+      {segments.slice(0, closed).map((segment, index) =>
+        segment.kind === 'text' ? (
+          <Prose key={index} text={segment.text} open={false} />
+        ) : (
+          <ToolRow
+            key={segment.call.callId}
+            call={segment.call}
+            result={segment.result}
+            status={message.status}
+            onOpenSettings={onOpenSearchSettings}
+          />
+        ),
+      )}
+      {(tail !== undefined || caret) && (
+        <Prose text={shown} open={revealing} animate={animate} caret={caret} />
+      )}
       {(status || name || stats.length > 0 || cut || retryable || copyable) && (
-        <footer className="mt-3 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-subtle">
+        <footer className="-mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-subtle">
           {status && (
             <span className={message.status === 'failed' ? 'text-danger' : 'text-muted'}>
               {status}
@@ -251,6 +293,7 @@ export const Chat = ({
   onStop,
   onRetry,
   onDismissNotice,
+  onOpenSearchSettings,
 }: ChatProps) => {
   // As Mensagens mudam a cada frame do Fluxo; morando aqui, só o Chat re-renderiza.
   const messages = useMessages(toi, conversationId);
@@ -373,6 +416,7 @@ export const Chat = ({
                 models={models}
                 retryable={canRetry && message === last}
                 onRetry={onRetry}
+                onOpenSearchSettings={onOpenSearchSettings}
               />
             ))}
           </div>

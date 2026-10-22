@@ -1,11 +1,12 @@
 import { useEffect, useRef, useState, type ReactNode, type Ref } from 'react';
-import type { ProviderInfo, Toi } from '../app/toi';
+import type { ProviderInfo, ServiceInfo, Toi } from '../app/toi';
 import type { AppErrorInfo } from '../domain/error';
 import { modelFamilies, togglePick, type Model, type ModelPicks } from '../domain/model';
-import { download, errorInfo, lower, requestPersistence } from './support';
+import { DEFAULT_TOOL_SPACE, TOOL_SPACES, type ToolSpace } from '../domain/web';
+import { download, errorInfo, linkClass, lower, requestPersistence } from './support';
 import { readTheme, saveTheme, type ThemePref } from './theme';
 
-export type SettingsSection = 'top' | 'modelos';
+export type SettingsSection = 'top' | 'modelos' | 'busca';
 
 export interface ModelPicksError {
   kind: 'read' | 'save';
@@ -129,6 +130,293 @@ const ModelList = ({
   </div>
 );
 
+/**
+ * Uma escolha entre poucas opções, com radios nativos: setas trocam a
+ * seleção e o grupo é uma parada só de Tab. O `[×]` é só visual.
+ */
+const Choices = <T extends string | number>({
+  name,
+  legend,
+  options,
+  value,
+  onChange,
+}: {
+  name: string;
+  /** O nome do grupo para leitor de tela; o título visível fica com quem usa. */
+  legend: string;
+  options: Array<{ value: T; label: ReactNode }>;
+  /** `null` enquanto a escolha gravada não chegou: as opções ficam desabilitadas. */
+  value: T | null;
+  onChange: (value: T) => void;
+}) => (
+  <fieldset className="flex flex-wrap gap-x-5 gap-y-2" disabled={value === null}>
+    <legend className="sr-only">{legend}</legend>
+    {options.map((option) => {
+      const checked = option.value === value;
+      return (
+        <label
+          key={option.value}
+          className={`cursor-pointer has-[:focus-visible]:outline-2 has-[:focus-visible]:outline-offset-3 has-[:focus-visible]:outline-accent has-[:focus-visible]:outline-solid ${checked ? 'text-accent' : 'text-muted hover:text-text'}`}
+        >
+          <input
+            type="radio"
+            name={name}
+            className="sr-only"
+            checked={checked}
+            onChange={() => onChange(option.value)}
+          />
+          <span aria-hidden className="text-subtle">
+            [{checked ? '×' : ' '}]
+          </span>{' '}
+          {option.label}
+        </label>
+      );
+    })}
+  </fieldset>
+);
+
+const SPACE_LABELS: Record<ToolSpace, string> = {
+  20_000: '20 mil',
+  40_000: '40 mil',
+  80_000: '80 mil',
+};
+
+/**
+ * Quanto as buscas de uma resposta podem ocupar do contexto. Gravar é
+ * otimista e volta à escolha anterior se falhar.
+ */
+const ToolSpaceChoice = ({ toi }: { toi: Toi }) => {
+  const [space, setSpace] = useState<ToolSpace | null>(null);
+  const [error, setError] = useState<AppErrorInfo | null>(null);
+
+  useEffect(() => {
+    let live = true;
+    toi.toolSpace().then(
+      (value) => {
+        if (live) setSpace(value);
+      },
+      (cause) => {
+        if (live) setError(errorInfo(cause));
+      },
+    );
+    return () => {
+      live = false;
+    };
+  }, [toi]);
+
+  const choose = async (value: ToolSpace) => {
+    const previous = space;
+    setSpace(value);
+    setError(null);
+    try {
+      await toi.saveToolSpace(value);
+    } catch (cause) {
+      setSpace(previous);
+      setError(errorInfo(cause));
+    }
+  };
+
+  return (
+    <div className="space-y-2">
+      <p aria-hidden className="text-text">
+        espaço por resposta
+      </p>
+      <Choices
+        name="tool-space"
+        legend="espaço por resposta"
+        value={space}
+        onChange={(value) => void choose(value)}
+        options={TOOL_SPACES.map((value) => ({
+          value,
+          label: (
+            <>
+              {SPACE_LABELS[value]}
+              {value === DEFAULT_TOOL_SPACE && <span className="text-subtle"> · padrão</span>}
+            </>
+          ),
+        }))}
+      />
+      <p className="text-sm text-subtle">
+        quantos tokens as buscas e leituras de uma resposta podem ocupar, com o que o modelo pensa e
+        escreve entre elas. com mais espaço ele pode pesquisar mais a fundo, mas vai menos da
+        conversa antiga junto. vale a partir do próximo envio.
+      </p>
+      {error && (
+        <p role="alert" className="text-danger">
+          {lower(error.message)}
+        </p>
+      )}
+    </div>
+  );
+};
+
+/**
+ * A Chave do Serviço das Ferramentas. Com ela o Modelo pode buscar e ler
+ * páginas; a copy diz o que sai, para quem, e que remover para a resposta em
+ * andamento.
+ */
+const SearchKey = ({ toi, service }: { toi: Toi; service: ServiceInfo }) => {
+  const [connected, setConnected] = useState(() => toi.serviceConnected(service.id));
+  const [editing, setEditing] = useState(false);
+  const [key, setKey] = useState('');
+  const [checking, setChecking] = useState(false);
+  const [removing, setRemoving] = useState(false);
+  const [error, setError] = useState<AppErrorInfo | null>(null);
+  const controller = useRef<AbortController | null>(null);
+
+  useEffect(() => () => controller.current?.abort(), []);
+
+  const submit = async () => {
+    if (!key.trim() || checking) return;
+    const current = new AbortController();
+    controller.current = current;
+    setChecking(true);
+    setError(null);
+    try {
+      await toi.connectService(service.id, key, current.signal);
+      setKey('');
+      setConnected(true);
+      setEditing(false);
+    } catch (cause) {
+      if (current.signal.aborted) return;
+      const info = errorInfo(cause);
+      // Só a recusa fala da Chave; cota, limite e rede não deixam saber se ela vale.
+      setError(
+        info.code === 'tool_invalid_credential'
+          ? info
+          : { ...info, message: `Não deu para validar a chave agora: ${lower(info.message)}` },
+      );
+    } finally {
+      setChecking(false);
+    }
+  };
+
+  const remove = async () => {
+    setError(null);
+    try {
+      await toi.disconnectService(service.id);
+      setConnected(false);
+    } catch (cause) {
+      setError(errorInfo(cause));
+    } finally {
+      setRemoving(false);
+    }
+  };
+
+  const name = service.name.toLowerCase();
+
+  return (
+    <>
+      <p>
+        com uma chave {service.of.toLowerCase()}, o modelo pode buscar na web e ler páginas durante a
+        resposta, quando achar útil. sem chave, ele responde só com o que já sabe.
+      </p>
+      <p>
+        o que sai daqui: o texto das buscas, que o modelo escreve e pode trazer trechos da conversa, e
+        os endereços das páginas que ele lê, só entre os que já apareceram na conversa. vai só{' '}
+        {service.to.toLowerCase()}, cujos{' '}
+        <a href={service.termsUrl} target="_blank" rel="noopener noreferrer" className={linkClass}>
+          termos
+        </a>{' '}
+        permitem usar esses dados para treinar modelos.
+      </p>
+
+      {connected && !editing ? (
+        <>
+          <p className="text-text">
+            <span className="text-accent">[×]</span> busca ligada pela {name}.
+          </p>
+          <div className="flex flex-wrap gap-x-6 gap-y-2">
+            <Action onClick={() => setEditing(true)}>trocar chave</Action>
+            <Action danger onClick={() => setRemoving(true)}>
+              remover chave
+            </Action>
+          </div>
+          {removing && (
+            <div className="flex flex-wrap items-baseline gap-x-4 gap-y-2" role="group">
+              <span className="text-text">remover a chave? a resposta em andamento para.</span>
+              <Action danger onClick={() => void remove()}>
+                sim, continuar
+              </Action>
+              <button
+                type="button"
+                className="text-subtle hover:text-text"
+                onClick={() => setRemoving(false)}
+              >
+                cancelar
+              </button>
+            </div>
+          )}
+          <ToolSpaceChoice toi={toi} />
+        </>
+      ) : (
+        <form
+          className="max-w-[34rem]"
+          onSubmit={(event) => {
+            event.preventDefault();
+            void submit();
+          }}
+        >
+          <label htmlFor="search-key" className="sr-only">
+            chave {service.of.toLowerCase()}
+          </label>
+          <div className="flex gap-3">
+            <input
+              id="search-key"
+              type="password"
+              value={key}
+              onChange={(event) => setKey(event.target.value)}
+              placeholder={service.keyPlaceholder}
+              autoComplete="off"
+              spellCheck={false}
+              aria-invalid={error !== null}
+              aria-describedby="search-key-hint"
+              className="min-w-0 flex-1 border border-line bg-panel px-3 py-2 text-base text-text outline-none transition-colors placeholder:text-subtle focus:border-accent aria-invalid:border-danger"
+            />
+            <button
+              type="submit"
+              disabled={!key.trim() || checking}
+              className="flex-none border border-accent px-3 py-2 text-accent transition-colors hover:bg-accent hover:text-bg disabled:border-line disabled:text-subtle disabled:hover:bg-transparent"
+            >
+              {checking ? 'validando…' : 'conectar'}
+            </button>
+          </div>
+          <p id="search-key-hint" className="mt-3 text-sm text-subtle">
+            crie uma em{' '}
+            <a href={service.keysUrl} target="_blank" rel="noopener noreferrer" className={linkClass}>
+              {new URL(service.keysUrl).host}
+            </a>
+            . ela fica neste navegador e só vai {service.to.toLowerCase()}.
+            {editing && (
+              <>
+                {' '}
+                <button
+                  type="button"
+                  className="text-muted hover:text-accent"
+                  onClick={() => {
+                    controller.current?.abort();
+                    setEditing(false);
+                    setKey('');
+                    setError(null);
+                  }}
+                >
+                  manter a atual
+                </button>
+              </>
+            )}
+          </p>
+        </form>
+      )}
+
+      {error && (
+        <p role="alert" className="text-danger">
+          {lower(error.message)}
+        </p>
+      )}
+    </>
+  );
+};
+
 const THEMES: Array<[ThemePref, string]> = [
   ['system', 'sistema'],
   ['light', 'claro'],
@@ -159,9 +447,12 @@ export default function Settings({
   const [persisted, setPersisted] = useState<boolean | null>(null);
 
   const modelsSection = useRef<HTMLElement>(null);
+  const searchSection = useRef<HTMLElement>(null);
+  const service = toi.services()[0]!;
 
   useEffect(() => {
     if (section === 'modelos') modelsSection.current?.scrollIntoView();
+    if (section === 'busca') searchSection.current?.scrollIntoView();
   }, [section]);
 
   useEffect(() => {
@@ -232,23 +523,16 @@ export default function Settings({
         )}
 
         <Section title="tema">
-          <div className="flex gap-5" role="radiogroup" aria-label="tema">
-            {THEMES.map(([value, label]) => (
-              <button
-                key={value}
-                type="button"
-                role="radio"
-                aria-checked={theme === value}
-                onClick={() => {
-                  saveTheme(value);
-                  setTheme(value);
-                }}
-                className={theme === value ? 'text-accent' : 'text-muted hover:text-text'}
-              >
-                <span className="text-subtle">[{theme === value ? '×' : ' '}]</span> {label}
-              </button>
-            ))}
-          </div>
+          <Choices
+            name="theme"
+            legend="tema"
+            value={theme}
+            onChange={(value) => {
+              saveTheme(value);
+              setTheme(value);
+            }}
+            options={THEMES.map(([value, label]) => ({ value, label }))}
+          />
         </Section>
 
         <Section title="chave">
@@ -305,6 +589,10 @@ export default function Settings({
           </Action>
         </Section>
 
+        <Section ref={searchSection} title="busca na web">
+          <SearchKey toi={toi} service={service} />
+        </Section>
+
         <Section title="armazenamento">
           {persisted === true ? (
             <p>
@@ -351,7 +639,7 @@ export default function Settings({
           )}
           {confirmRow(
             'erase_all',
-            'apagar conversas, configurações e a chave? não tem volta.',
+            'apagar conversas, configurações e as chaves? não tem volta.',
             () =>
               void run(async () => {
                 await toi.eraseAll();

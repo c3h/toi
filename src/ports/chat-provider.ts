@@ -1,5 +1,6 @@
 import type { Attachment } from '../domain/attachment';
 import type { ProviderId } from '../domain/ids';
+import type { JsonObject } from '../domain/json';
 import type { Effort, Model } from '../domain/model';
 import type { StreamEvent } from '../domain/stream';
 
@@ -10,9 +11,19 @@ import type { StreamEvent } from '../domain/stream';
 export type OutgoingPart =
   | { type: 'text'; text: string }
   | { type: 'reasoning'; text: string; signature: string }
-  | { type: 'file'; attachment: Attachment; data: Blob };
+  | { type: 'redacted_reasoning'; data: string }
+  | { type: 'file'; attachment: Attachment; data: Blob }
+  | { type: 'tool_call'; callId: string; tool: string; input: JsonObject }
+  | { type: 'tool_result'; callId: string; content: string; isError: boolean };
 
-/** Carrega Partes, não texto: raciocínio, Anexos e ferramentas entram sem mudar a porta. */
+/** Uma Ferramenta oferecida ao Modelo; `inputSchema` é JSON Schema. */
+export interface ToolDefinition {
+  name: string;
+  description: string;
+  inputSchema: JsonObject;
+}
+
+/** Carrega Partes, não texto: raciocínio, Anexos e Ferramentas entram sem mudar a porta. */
 export interface ChatMessage {
   role: 'user' | 'assistant';
   parts: OutgoingPart[];
@@ -25,6 +36,8 @@ export interface ChatRequest {
   messages: ChatMessage[];
   /** Instrução de sistema; campo próprio, nunca uma Mensagem. */
   system?: string;
+  /** Vazio quando o toi não oferece Ferramentas. */
+  tools: ToolDefinition[];
 }
 
 /**

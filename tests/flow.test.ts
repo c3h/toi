@@ -13,7 +13,7 @@ describe('createFlow', () => {
   it('flush grava o rascunho sem esperar o intervalo', async () => {
     const { store, deps } = await baseDeps();
     const { provider, delta } = gatedProvider();
-    const flow = createFlow({ ...deps, provider: () => provider });
+    const flow = createFlow({ ...deps, provider: () => provider, tools: () => null });
 
     const pending = flow.send(sendInput());
 
@@ -37,7 +37,7 @@ describe('createFlow', () => {
   it('stop antes do Fluxo começar fecha em interrupted', async () => {
     const { store, deps } = await baseDeps();
     const provider = new ScriptedProvider(replyEvents());
-    const flow = createFlow({ ...deps, provider: () => provider });
+    const flow = createFlow({ ...deps, provider: () => provider, tools: () => null });
 
     const pending = flow.send(sendInput());
     await flow.stop();
@@ -51,8 +51,8 @@ describe('createFlow', () => {
   it('recusa um Fluxo na mesma Conversa enquanto outra aba a usa', async () => {
     const { deps } = await baseDeps();
     const { provider, delta } = gatedProvider();
-    const tabA = createFlow({ ...deps, provider: () => provider });
-    const tabB = createFlow({ ...deps, provider: () => provider });
+    const tabA = createFlow({ ...deps, provider: () => provider, tools: () => null });
+    const tabB = createFlow({ ...deps, provider: () => provider, tools: () => null });
 
     const pending = tabA.send(sendInput());
     await delta;

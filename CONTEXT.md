@@ -1,6 +1,6 @@
 # Toi
 
-Chat local-first: a pessoa conversa com modelos da Anthropic direto do navegador. Nada é gravado em servidor; a única saída da máquina é a Conversa enviada à Anthropic para gerar a resposta.
+Chat local-first: a pessoa conversa com modelos da Anthropic direto do navegador. Nada é gravado em servidor; a Conversa sai da máquina para a Anthropic gerar a resposta e, com a Chave da TinyFish, as consultas e URLs que o Modelo pede vão a ela ([ADR 0010](docs/adr/0010-web-tools-via-tinyfish.md)).
 
 Vocabulário canônico do projeto. Se um termo aparecer em `docs/architecture.md`, vale o significado daqui.
 
@@ -19,7 +19,7 @@ Uma fala de um papel — `user` ou `assistant` — dentro de uma Conversa. Cont�
 _Avoid_: Bolha, resposta (a resposta é uma Mensagem do assistant)
 
 **Parte**:
-Um bloco de conteúdo dentro de uma Mensagem: `text`, `file` ou `reasoning`. A Mensagem do user nasce com os Anexos, um `file` cada, e o texto; a do assistant pode começar vazia e receber texto durante o Fluxo. O schema já prevê `reasoning`.
+Um bloco de conteúdo dentro de uma Mensagem: `text`, `file`, `reasoning`, `redacted_reasoning`, `tool_call` ou `tool_result`. A Mensagem do user nasce com os Anexos, um `file` cada, e o texto; a do assistant pode começar vazia e recebe, em ordem, raciocínio, texto, chamadas de Ferramenta e os resultados delas durante o Fluxo.
 _Avoid_: Bloco, chunk, conteúdo
 
 **Anexo**:
@@ -33,6 +33,10 @@ _Avoid_: Status, flag
 **Fluxo**:
 A sequência de Eventos que o Provedor emite enquanto produz uma Mensagem do assistant.
 _Avoid_: Stream (em texto corrido), resposta parcial
+
+**Rodada**:
+Uma ida e volta ao Provedor dentro de uma Mensagem do assistant. A Rodada que termina pedindo Ferramenta abre a seguinte, com os resultados. O **espaço das Rodadas** é quanto elas podem somar à requisição de uma resposta, escolhido pela pessoa.
+_Avoid_: Turno (turno é a pergunta da pessoa e a resposta inteira), passo, iteração
 
 **Evento**:
 Uma atualização atômica dentro de um Fluxo: `started`, `part_started`, `delta`, `part_finished`, `usage` ou `finished`.
@@ -58,8 +62,20 @@ _Avoid_: Engine, LLM
 O quanto o Modelo raciocina e gasta numa resposta, numa escala de cinco níveis (`low` a `max`), escolhido pela pessoa ao lado do Modelo e sempre enviado. Todo Modelo oferecido aceita a escala inteira.
 _Avoid_: Effort (em texto corrido), nível de raciocínio, padrão
 
+**Ferramenta**:
+Uma ação que o Modelo pede durante a resposta e o toi executa num Serviço: a **Busca** (`web_search`), que devolve trechos e Fontes, e a **Leitura** (`web_fetch`), que lê páginas cuja URL já está na Conversa.
+_Avoid_: Tool (em texto corrido), plugin, função
+
+**Serviço**:
+O serviço externo que executa as Ferramentas, com Chave própria. Hoje, apenas a TinyFish. Não gera Mensagens; isso é do Provedor.
+_Avoid_: Provedor, API de busca
+
+**Fonte**:
+O título e a URL de uma página que uma Ferramenta achou ou leu. As Fontes gravadas tornam a URL elegível para Leitura na Conversa.
+_Avoid_: Citação, link, referência
+
 **Chave**:
-A credencial de um Provedor fornecida pela pessoa, guardada apenas no navegador; uma por Provedor.
+A credencial de um Provedor ou de um Serviço fornecida pela pessoa, guardada apenas no navegador; uma por dono.
 _Avoid_: Token, secret, senha
 
 **Exportação**:

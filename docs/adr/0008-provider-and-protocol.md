@@ -28,10 +28,10 @@ A UI recebe só `ProviderInfo` via `Toi`: nome com as formas contraídas ("da An
 
 ## Consequences
 
-- Esta etapa não adiciona Provedor: `ProviderId` continua `'anthropic'`, a CSP e o `AGENTS.md` não mudam. Cada Provedor novo exige antes provar CORS no navegador com os endpoints e headers reais, e abre a própria origem em `public/_headers`.
+- Esta etapa não adiciona Provedor: `ProviderId` continua `'anthropic'`. A CSP e o `AGENTS.md` só mudaram depois, para o Serviço das Ferramentas ([ADR 0010](0010-web-tools-via-tinyfish.md)). Cada Provedor novo exige antes provar CORS no navegador com os endpoints e headers reais, e abre a própria origem em `public/_headers`.
 - Com um Provedor registrado, a UI não oferece escolha; a tela de escolha e o agrupamento por Provedor entram com o segundo.
 - `toi.connect`/`disconnect` recebem o Provedor; "apagar tudo" limpa todas as Chaves, inclusive de Provedor que saiu do registro.
 - O Fluxo continua um só por `Toi` ([ADR 0005](0005-flow-as-module.md)) e captura o Provedor no início; o Fluxo em voo nunca troca de Provedor. O Lock continua por Conversa.
 - Retry grava Provedor e Modelo de destino antes da rede: uma tentativa que falha antes de `started` fica atribuída a quem foi chamado.
-- Uma Conversa pode trocar de Provedor; só texto volta ao Provedor, então o histórico é portátil. Quando o raciocínio entrar, a Parte só volta ao Provedor que a gerou.
+- Uma Conversa pode trocar de Provedor; o texto volta a qualquer um, então o histórico é portátil. Raciocínio só volta dentro da resposta em curso, e Partes de Ferramenta só ao Provedor que as gerou e quando o envio oferece Ferramentas ([ADR 0010](0010-web-tools-via-tinyfish.md)).
 - Ainda não resolvido, para o Provedor que precisar: Protocolo por Modelo (OpenCode Go), escolha explícita quando o Provedor da Conversa não está conectado e falha parcial ao listar Modelos de vários Provedores (hoje uma falha derruba o refresh inteiro).

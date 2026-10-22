@@ -1,9 +1,14 @@
 import { truncatedError } from '../../../domain/error';
-import type { StreamEvent } from '../../../domain/stream';
+import type { DeltaKind, PartStart, StreamEvent } from '../../../domain/stream';
 import { emptyUsage, type StopReason, type Usage } from '../../../domain/usage';
 import { parseSse } from '../../http/sse';
 import type { AnthropicMessagesErrors } from './error';
-import type { AnthropicStreamEvent, AnthropicUsage } from './types';
+import type {
+  AnthropicStreamEvent,
+  AnthropicUsage,
+  ContentBlockDeltaEvent,
+  ContentBlockStartEvent,
+} from './types';
 
 const stopReason = (value: string | null | undefined): StopReason => {
   switch (value) {
@@ -25,12 +30,47 @@ const mergeInputUsage = (usage: Usage, raw: AnthropicUsage): void => {
   usage.cacheReadInputTokens = raw.cache_read_input_tokens ?? usage.cacheReadInputTokens;
 };
 
+/** O bloco que o domínio conhece; `null` para tipo novo, que é ignorado. */
+const partStart = (block: ContentBlockStartEvent['content_block']): PartStart | null => {
+  switch (block.type) {
+    case 'text':
+      return { type: 'text' };
+    case 'thinking':
+      return { type: 'reasoning' };
+    case 'redacted_thinking':
+      return typeof block.data === 'string' ? { type: 'redacted_reasoning', data: block.data } : null;
+    case 'tool_use':
+      return typeof block.id === 'string' && typeof block.name === 'string'
+        ? { type: 'tool_call', callId: block.id, tool: block.name }
+        : null;
+    default:
+      return null;
+  }
+};
+
+const deltaOf = (
+  delta: ContentBlockDeltaEvent['delta'],
+): { part: DeltaKind; text: string } | null => {
+  switch (delta.type) {
+    case 'text_delta':
+      return typeof delta.text === 'string' ? { part: 'text', text: delta.text } : null;
+    case 'thinking_delta':
+      return typeof delta.thinking === 'string' ? { part: 'reasoning', text: delta.thinking } : null;
+    case 'signature_delta':
+      return typeof delta.signature === 'string' ? { part: 'signature', text: delta.signature } : null;
+    case 'input_json_delta':
+      return typeof delta.partial_json === 'string' ? { part: 'input', text: delta.partial_json } : null;
+    default:
+      return null;
+  }
+};
+
 export async function* mapAnthropicStream(
   body: ReadableStream<Uint8Array>,
   errors: AnthropicMessagesErrors,
 ): AsyncGenerator<StreamEvent> {
   const usage = emptyUsage();
-  const textBlocks = new Set<number>();
+  const openBlocks = new Set<number>();
   let finished = false;
 
   for await (const frame of parseSse(body)) {
@@ -52,28 +92,25 @@ export async function* mapAnthropicStream(
       }
 
       case 'content_block_start': {
-        if (payload.content_block.type === 'text') {
-          textBlocks.add(payload.index);
-          yield { type: 'part_started', index: payload.index, part: 'text' };
-        }
+        const part = partStart(payload.content_block);
+        if (part === null) break;
+
+        openBlocks.add(payload.index);
+        yield { type: 'part_started', index: payload.index, part };
         break;
       }
 
       case 'content_block_delta': {
-        if (!textBlocks.has(payload.index)) break;
-        if (payload.delta.type !== 'text_delta' || typeof payload.delta.text !== 'string') break;
+        if (!openBlocks.has(payload.index)) break;
+        const delta = deltaOf(payload.delta);
+        if (delta === null) break;
 
-        yield {
-          type: 'delta',
-          index: payload.index,
-          part: 'text',
-          text: payload.delta.text,
-        };
+        yield { type: 'delta', index: payload.index, ...delta };
         break;
       }
 
       case 'content_block_stop': {
-        if (!textBlocks.delete(payload.index)) break;
+        if (!openBlocks.delete(payload.index)) break;
         yield { type: 'part_finished', index: payload.index };
         break;
       }

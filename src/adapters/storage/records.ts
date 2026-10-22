@@ -1,10 +1,12 @@
 import type { Attachment, ImageMediaType } from '../../domain/attachment';
 import type { Conversation } from '../../domain/conversation';
-import type { AppErrorCode } from '../../domain/error';
+import type { AppErrorCode, AppErrorInfo } from '../../domain/error';
 import type { ProviderId } from '../../domain/ids';
+import type { JsonObject } from '../../domain/json';
 import type { Message, MessageStatus, Part } from '../../domain/message';
 import type { Effort, FamilyRef, Model, ModelPicks, ModelRef } from '../../domain/model';
 import type { StopReason } from '../../domain/usage';
+import type { FetchFailureCode } from '../../domain/web';
 
 /**
  * Forma gravada no IndexedDB. A estrutura é escrita à mão, não derivada do
@@ -34,10 +36,28 @@ export type AttachmentRecord =
   | { id: string; kind: 'pdf'; name: string; size: number; pages: number | null }
   | { id: string; kind: 'text'; name: string; size: number };
 
+export interface ErrorRecord {
+  code: AppErrorCode;
+  message: string;
+  detail: string | null;
+  retryAfterSeconds: number | null;
+}
+
 export type PartRecord =
   | { type: 'text'; text: string }
   | { type: 'reasoning'; text: string; signature: string }
-  | { type: 'file'; attachment: AttachmentRecord };
+  | { type: 'redacted_reasoning'; data: string }
+  | { type: 'file'; attachment: AttachmentRecord }
+  /** `input` é o JSON que o Modelo mandou, gravado como veio. */
+  | { type: 'tool_call'; callId: string; tool: string; input: JsonObject }
+  | {
+      type: 'tool_result';
+      callId: string;
+      content: string;
+      sources: Array<{ title: string; url: string }>;
+      failures: Array<{ url: string; code: FetchFailureCode }>;
+      error: ErrorRecord | null;
+    };
 
 /** Os bytes de um Anexo, fora da Mensagem; `conversationId` serve à cascata. */
 export interface AttachmentBytesRecord {
@@ -66,12 +86,7 @@ export interface MessageRecord {
     cacheReadInputTokens: number;
   } | null;
   stopReason: StopReason | null;
-  error: {
-    code: AppErrorCode;
-    message: string;
-    detail: string | null;
-    retryAfterSeconds: number | null;
-  } | null;
+  error: ErrorRecord | null;
 }
 
 export const toConversationRecord = (conversation: Conversation): ConversationRecord => ({
@@ -134,14 +149,39 @@ const fromAttachmentRecord = (record: AttachmentRecord): Attachment => {
   }
 };
 
+const toErrorRecord = (error: AppErrorInfo): ErrorRecord => ({
+  code: error.code,
+  message: error.message,
+  detail: error.detail,
+  retryAfterSeconds: error.retryAfterSeconds,
+});
+
+const fromErrorRecord = (record: ErrorRecord): AppErrorInfo => ({ ...record });
+
+/** Cópia do JSON: o registro não compartilha objeto com o domínio. */
+const copyJson = (value: JsonObject): JsonObject => structuredClone(value);
+
 const toPartRecord = (part: Part): PartRecord => {
   switch (part.type) {
     case 'text':
       return { type: 'text', text: part.text };
     case 'reasoning':
       return { type: 'reasoning', text: part.text, signature: part.signature };
+    case 'redacted_reasoning':
+      return { type: 'redacted_reasoning', data: part.data };
     case 'file':
       return { type: 'file', attachment: toAttachmentRecord(part.attachment) };
+    case 'tool_call':
+      return { type: 'tool_call', callId: part.callId, tool: part.tool, input: copyJson(part.input) };
+    case 'tool_result':
+      return {
+        type: 'tool_result',
+        callId: part.callId,
+        content: part.content,
+        sources: part.sources.map(({ title, url }) => ({ title, url })),
+        failures: part.failures.map(({ url, code }) => ({ url, code })),
+        error: part.error && toErrorRecord(part.error),
+      };
   }
 };
 
@@ -151,8 +191,26 @@ const fromPartRecord = (record: PartRecord): Part => {
       return { type: 'text', text: record.text };
     case 'reasoning':
       return { type: 'reasoning', text: record.text, signature: record.signature };
+    case 'redacted_reasoning':
+      return { type: 'redacted_reasoning', data: record.data };
     case 'file':
       return { type: 'file', attachment: fromAttachmentRecord(record.attachment) };
+    case 'tool_call':
+      return {
+        type: 'tool_call',
+        callId: record.callId,
+        tool: record.tool,
+        input: copyJson(record.input),
+      };
+    case 'tool_result':
+      return {
+        type: 'tool_result',
+        callId: record.callId,
+        content: record.content,
+        sources: record.sources.map(({ title, url }) => ({ title, url })),
+        failures: record.failures.map(({ url, code }) => ({ url, code })),
+        error: record.error && fromErrorRecord(record.error),
+      };
   }
 };
 
@@ -176,12 +234,7 @@ export const toMessageRecord = (message: Message): MessageRecord => ({
     cacheReadInputTokens: message.usage.cacheReadInputTokens,
   },
   stopReason: message.stopReason,
-  error: message.error && {
-    code: message.error.code,
-    message: message.error.message,
-    detail: message.error.detail,
-    retryAfterSeconds: message.error.retryAfterSeconds,
-  },
+  error: message.error && toErrorRecord(message.error),
 });
 
 export const fromMessageRecord = (record: MessageRecord): Message => ({
@@ -199,7 +252,7 @@ export const fromMessageRecord = (record: MessageRecord): Message => ({
   effort: record.effort,
   usage: record.usage && { ...record.usage },
   stopReason: record.stopReason,
-  error: record.error && { ...record.error },
+  error: record.error && fromErrorRecord(record.error),
 });
 
 /** Item do cache de Modelos em `settings`, um cache por Provedor. */

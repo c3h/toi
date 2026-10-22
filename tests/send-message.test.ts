@@ -25,7 +25,7 @@ import {
 
 const successEvents = (): StreamEvent[] => [
   { type: 'started', model: testModel.id, usage: usage(10, 0) },
-  { type: 'part_started', index: 0, part: 'text' },
+  { type: 'part_started', index: 0, part: { type: 'text' } },
   { type: 'delta', index: 0, part: 'text', text: 'Olá' },
   { type: 'delta', index: 0, part: 'text', text: ', mundo' },
   { type: 'part_finished', index: 0 },
@@ -51,7 +51,7 @@ describe('sendMessage', () => {
     const provider = new ScriptedProvider(successEvents());
 
     const result = await sendMessage(
-      { ...deps, provider },
+      { ...deps, tools: null, provider },
       ask(),
     );
 
@@ -74,6 +74,7 @@ describe('sendMessage', () => {
       maxTokens: 8_192,
       effort: 'low',
       messages: [{ role: 'user', parts: [{ type: 'text', text: 'Pergunta' }] }],
+      tools: [],
     });
   });
 
@@ -88,7 +89,7 @@ describe('sendMessage', () => {
 
     const provider = new ScriptedProvider(async function* (): AsyncGenerator<StreamEvent> {
       yield { type: 'started', model: testModel.id, usage: usage(3, 0) };
-      yield { type: 'part_started', index: 0, part: 'text' };
+      yield { type: 'part_started', index: 0, part: { type: 'text' } };
       yield { type: 'delta', index: 0, part: 'text', text: 'parcial' };
 
       if (controller.signal.aborted) throw abortError();
@@ -100,6 +101,7 @@ describe('sendMessage', () => {
     const promise = sendMessage(
       {
         ...deps,
+        tools: null,
         provider,
         onUpdate: (message) => {
           if (textOf(message) === 'parcial') signalFirstDelta();
@@ -127,7 +129,7 @@ describe('sendMessage', () => {
     });
 
     const result = await sendMessage(
-      { ...deps, provider },
+      { ...deps, tools: null, provider },
       ask(),
     );
 
@@ -144,7 +146,7 @@ describe('sendMessage', () => {
     });
 
     const result = await sendMessage(
-      { ...deps, provider },
+      { ...deps, tools: null, provider },
       ask(),
     );
 
@@ -174,7 +176,7 @@ describe('sendMessage', () => {
     });
 
     const result = await sendMessage(
-      { ...deps, provider },
+      { ...deps, tools: null, provider },
       ask(),
     );
 
@@ -198,7 +200,7 @@ describe('sendMessage', () => {
     });
 
     const result = await sendMessage(
-      { ...deps, provider },
+      { ...deps, tools: null, provider },
       ask(),
     );
 
@@ -224,14 +226,14 @@ describe('sendMessage', () => {
     });
 
     const first = await sendMessage(
-      { ...deps, provider },
+      { ...deps, tools: null, provider },
       ask(),
     );
 
     failing = false;
 
     const retried = await retryMessage(
-      { ...deps, provider },
+      { ...deps, tools: null, provider },
       {
         conversationId: 'c1',
         messageId: first.message.id,
@@ -258,7 +260,7 @@ describe('sendMessage', () => {
   it('retry grava o destino novo antes da rede, mesmo se falhar antes de started', async () => {
     const { store, deps } = await baseDeps();
     const first = await sendMessage(
-      { ...deps, provider: new ScriptedProvider(successEvents()) },
+      { ...deps, tools: null, provider: new ScriptedProvider(successEvents()) },
       ask(),
     );
 
@@ -268,7 +270,7 @@ describe('sendMessage', () => {
     });
 
     const retried = await retryMessage(
-      { ...deps, provider: unreachable },
+      { ...deps, tools: null, provider: unreachable },
       {
         conversationId: 'c1',
         messageId: first.message.id,
@@ -299,7 +301,7 @@ describe('sendMessage com Anexos', () => {
     const provider = new ScriptedProvider(successEvents());
     const files = [imageFile('i1', 3), textFile('t1', '# notas')];
 
-    const result = await sendMessage({ ...deps, provider }, ask({ attachments: files }));
+    const result = await sendMessage({ ...deps, tools: null, provider }, ask({ attachments: files }));
 
     expect(result.message.status).toBe('complete');
     const [user] = await store.listMessages('c1');
@@ -330,7 +332,7 @@ describe('sendMessage com Anexos', () => {
     const controller = new AbortController();
 
     const run = await startSendMessage(
-      { ...deps, provider },
+      { ...deps, tools: null, provider },
       ask({ attachments: [imageFile('i1')], signal: controller.signal }),
     );
     await reading.promise;
@@ -345,11 +347,11 @@ describe('sendMessage com Anexos', () => {
   it('Anexo que sumiu do navegador falha a resposta com storage_failed', async () => {
     const { store, deps } = await baseDeps();
     const provider = new ScriptedProvider(successEvents());
-    const first = await sendMessage({ ...deps, provider }, ask({ attachments: [imageFile('i1')] }));
+    const first = await sendMessage({ ...deps, tools: null, provider }, ask({ attachments: [imageFile('i1')] }));
     store.attachments.delete('i1');
 
     const retried = await retryMessage(
-      { ...deps, provider },
+      { ...deps, tools: null, provider },
       {
         conversationId: 'c1',
         messageId: first.message.id,

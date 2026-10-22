@@ -15,6 +15,7 @@ Decidimos que `Flow` (`app/flow.ts`) é o módulo do Fluxo em voo. Ele é dono d
 - `stop` deixa de ser detalhe de UI; `architecture.md` §3–§4 foram atualizados.
 - A UI não recebe `AbortSignal`, `Clock` nem `ChatProvider`; recebe `Flow` e `Toi`.
 - `disconnect`, `eraseConversations` e `eraseAll` rodam em `Flow.exclusive`: param o Fluxo e recusam `send`/`retry` com `flow_busy` até terminar, evitando que um Fluxo em voo ou iniciado durante a limpeza recrie a Mensagem. `deleteConversation` usa o mesmo mecanismo restrito à Conversa apagada, sem interromper o Fluxo de outra.
+- O Serviço das Ferramentas é capturado no início do Fluxo, como o Provedor; `disconnectService` também roda em `exclusive` e para a resposta em curso ([ADR 0010](0010-web-tools-via-tinyfish.md)).
 - `toi.flow` não muda de identidade ao trocar a Chave; a UI pode guardar a referência. Sem Chave, `send`/`retry` recusam com `not_connected`. Trocar a Chave não interrompe o Fluxo em voo.
 - `send-message.ts` continua sendo o caso de uso; `startSendMessage`/`startRetryMessage` expõem um `MessageRun` com `flush` para o `Flow` — o teste de enviar/abortar/retry continua na mesma fronteira.
 - Um `Toi` tem no máximo um Fluxo ativo; um segundo `send`/`retry` é recusado em vez de enfileirar.

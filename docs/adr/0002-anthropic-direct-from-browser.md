@@ -13,4 +13,5 @@ A integração fica atrás da porta `ChatProvider`, com Eventos normalizados. O 
 
 - A Chave é legível por qualquer JavaScript da origem. O modelo de ameaça está em `docs/architecture.md` §8; a mitigação é CSP rígida, zero terceiros e nenhuma renderização de HTML cru.
 - O header `anthropic-dangerous-direct-browser-access` só é enviado para `api.anthropic.com`, nunca para outra origem.
+- Desde 2026-10-22, as Ferramentas também saem direto do navegador, para os hosts da TinyFish e só com a Chave dela, atrás da porta `WebTools` ([ADR 0010](0010-web-tools-via-tinyfish.md)).
 - Um segundo Provedor entra como novo adaptador da mesma porta. Não sai sem tocar em domínio e UI como se previa: Conversa e Mensagem gravam o Provedor e a UI lê um descritor ([ADR 0008](0008-provider-and-protocol.md)).

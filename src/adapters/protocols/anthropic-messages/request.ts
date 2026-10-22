@@ -1,10 +1,14 @@
 import type { ImageMediaType } from '../../../domain/attachment';
+import type { JsonObject } from '../../../domain/json';
 import type { Effort } from '../../../domain/model';
-import type { ChatRequest, OutgoingPart } from '../../../ports/chat-provider';
+import type { ChatRequest, OutgoingPart, ToolDefinition } from '../../../ports/chat-provider';
 
 export type AnthropicContentBlock =
   | { type: 'text'; text: string }
   | { type: 'thinking'; thinking: string; signature: string }
+  | { type: 'redacted_thinking'; data: string }
+  | { type: 'tool_use'; id: string; name: string; input: JsonObject }
+  | { type: 'tool_result'; tool_use_id: string; content: string; is_error: boolean }
   | { type: 'image'; source: { type: 'base64'; media_type: ImageMediaType; data: string } }
   | {
       type: 'document';
@@ -20,10 +24,37 @@ export interface AnthropicPayload {
   stream: true;
   system?: string;
   output_config: { effort: Effort };
+  tools?: AnthropicTool[];
   messages: Array<{ role: 'user' | 'assistant'; content: AnthropicContentBlock[] }>;
 }
 
-const base64 = async (blob: Blob): Promise<string> => (await blob.bytes()).toBase64();
+/**
+ * Sem `eager_input_streaming`: os inputs são curtos, e a API só emite o JSON
+ * de cada parâmetro depois de validá-lo, o que vale mais que vê-lo chegar.
+ */
+export interface AnthropicTool {
+  name: string;
+  description: string;
+  input_schema: JsonObject;
+}
+
+const toTool = (tool: ToolDefinition): AnthropicTool => ({
+  name: tool.name,
+  description: tool.description,
+  input_schema: tool.inputSchema,
+});
+
+// Cada Rodada reenvia os mesmos Blobs do turno: codifica uma vez por Blob, que leva o cache junto.
+const encoded = new WeakMap<Blob, Promise<string>>();
+
+const base64 = (blob: Blob): Promise<string> => {
+  let data = encoded.get(blob);
+  if (data === undefined) {
+    data = blob.bytes().then((bytes) => bytes.toBase64());
+    encoded.set(blob, data);
+  }
+  return data;
+};
 
 /** Arquivo de texto vai como documento: fica separado da fala da pessoa, com o nome como título. */
 const fileBlock = async ({
@@ -57,8 +88,19 @@ const toContentBlock = async (part: OutgoingPart): Promise<AnthropicContentBlock
       return { type: 'text', text: part.text };
     case 'reasoning':
       return { type: 'thinking', thinking: part.text, signature: part.signature };
+    case 'redacted_reasoning':
+      return { type: 'redacted_thinking', data: part.data };
     case 'file':
       return fileBlock(part);
+    case 'tool_call':
+      return { type: 'tool_use', id: part.callId, name: part.tool, input: part.input };
+    case 'tool_result':
+      return {
+        type: 'tool_result',
+        tool_use_id: part.callId,
+        content: part.content,
+        is_error: part.isError,
+      };
   }
 };
 
@@ -69,6 +111,7 @@ export const toAnthropicPayload = async (request: ChatRequest): Promise<Anthropi
   stream: true,
   ...(request.system === undefined ? {} : { system: request.system }),
   output_config: { effort: request.effort },
+  ...(request.tools.length === 0 ? {} : { tools: request.tools.map(toTool) }),
   messages: await Promise.all(
     request.messages.map(async (message) => ({
       role: message.role,

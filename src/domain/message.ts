@@ -1,17 +1,43 @@
 import type { Attachment } from './attachment';
 import type { AppErrorInfo } from './error';
 import type { ConversationId, MessageId, ProviderId } from './ids';
+import type { JsonObject } from './json';
 import type { Effort } from './model';
 import type { StopReason, Usage } from './usage';
+import type { FetchFailure, Source } from './web';
+
+/** Um pedido do Modelo a uma Ferramenta, com o input como veio, para voltar igual ao Provedor. */
+export interface ToolCallPart {
+  type: 'tool_call';
+  callId: string;
+  tool: string;
+  input: JsonObject;
+}
+
+/**
+ * O que o toi devolveu ao Modelo. `content` é o texto entregue, montado das
+ * Fontes e das falhas; `failures` são as URLs de uma Leitura que não abriram;
+ * `error` é a falha da chamada inteira. Sucesso parcial é `error: null` com
+ * `failures` não vazio.
+ */
+export interface ToolResultPart {
+  type: 'tool_result';
+  callId: string;
+  content: string;
+  sources: Source[];
+  failures: FetchFailure[];
+  error: AppErrorInfo | null;
+}
 
 export type Part =
   | { type: 'text'; text: string }
+  /** `text` pode vir vazio: o Modelo raciocina sem mostrar. A `signature` volta igual ao Provedor. */
   | { type: 'reasoning'; text: string; signature: string }
+  | { type: 'redacted_reasoning'; data: string }
   /** Só na Mensagem do user, antes do texto; os bytes ficam fora da Mensagem. */
-  | { type: 'file'; attachment: Attachment };
-
-/** O que um `delta` do Fluxo pode trazer. */
-export type PartKind = 'text' | 'reasoning';
+  | { type: 'file'; attachment: Attachment }
+  | ToolCallPart
+  | ToolResultPart;
 
 export type MessageStatus = 'complete' | 'streaming' | 'interrupted' | 'failed';
 
@@ -26,8 +52,8 @@ export interface Message {
   createdAt: number;
   completedAt: number | null;
   /**
-   * Primeiro `delta` do Fluxo, de qualquer Parte. `null` na Mensagem do user
-   * e antes do primeiro delta.
+   * Primeiro `delta` do Fluxo, de qualquer Parte e de qualquer Rodada. `null`
+   * na Mensagem do user e antes do primeiro delta.
    */
   firstTokenAt: number | null;
   /** Quem gerou a resposta; `null` na Mensagem do user, como `model`. */
@@ -35,7 +61,9 @@ export interface Message {
   model: string | null;
   /** O Esforço pedido; `null` na Mensagem do user, como `model`. */
   effort: Effort | null;
+  /** Soma das Rodadas. */
   usage: Usage | null;
+  /** Da última Rodada, gravado só no término lógico. */
   stopReason: StopReason | null;
   error: AppErrorInfo | null;
 }
@@ -51,7 +79,7 @@ export const closeMessage = (
 export interface Timing {
   /**
    * Da criação da Mensagem ao primeiro `delta`, a espera que a pessoa sente:
-   * inclui as escritas locais e o raciocínio oculto, que não emite delta.
+   * inclui as escritas locais e o raciocínio que não emite delta.
    */
   firstTokenMs: number;
   /**
@@ -79,36 +107,16 @@ export const timingOf = (message: Message): Timing | null => {
   };
 };
 
-export const textOf = (message: Message): string =>
+/** Os trechos de texto da resposta, em ordem; entre eles pode haver Ferramentas. */
+export const textOf = (message: Pick<Message, 'parts'>): string =>
   message.parts
     .filter((part): part is Extract<Part, { type: 'text' }> => part.type === 'text')
     .map((part) => part.text)
-    .join('');
+    .join('\n\n');
 
-/** Aceita também a Mensagem já escolhida para a requisição, que só tem Partes `text` e `file`. */
 export const attachmentsOf = (message: Pick<Message, 'parts'>): Attachment[] =>
   message.parts.flatMap((part) => (part.type === 'file' ? [part.attachment] : []));
 
-export const appendText = (message: Message, text: string): Message => {
-  const parts = [...message.parts];
-  const last = parts[parts.length - 1];
-
-  if (last?.type === 'text') {
-    parts[parts.length - 1] = { type: 'text', text: last.text + text };
-  } else {
-    parts.push({ type: 'text', text });
-  }
-
-  return { ...message, parts };
-};
-
-/** Um `delta` do Fluxo. O primeiro, de qualquer Parte, encerra a espera; só o texto vira Parte. */
-export const receiveDelta = (
-  message: Message,
-  part: PartKind,
-  text: string,
-  now: number,
-): Message => {
-  const timed = message.firstTokenAt === null ? { ...message, firstTokenAt: now } : message;
-  return part === 'text' ? appendText(timed, text) : timed;
-};
+/** O resultado de cada chamada que já tem um, pelo `callId`; chamada fora do mapa está pendente. */
+export const resultsByCall = (parts: Part[]): Map<string, ToolResultPart> =>
+  new Map(parts.flatMap((part) => (part.type === 'tool_result' ? [[part.callId, part] as const] : [])));

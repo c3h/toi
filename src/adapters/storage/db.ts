@@ -7,6 +7,11 @@ interface SettingRow {
 }
 
 interface CredentialRow {
+  /**
+   * O dono da Chave, Provedor ou Serviço. O nome ficou de quando só Provedor
+   * tinha Chave: o Dexie não troca chave primária no lugar, e um banco já
+   * criado abriria e recusaria toda escrita em `credentials`.
+   */
   provider: string;
   apiKey: string;
 }

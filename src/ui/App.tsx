@@ -439,6 +439,7 @@ export const App = ({ toi }: { toi: Toi }) => {
                 onStop={() => void toi.flow.stop()}
                 onRetry={retry}
                 onDismissNotice={() => setNotice(null)}
+                onOpenSearchSettings={() => setSettings('busca')}
               />
             )}
           </>

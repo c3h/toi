@@ -1,4 +1,4 @@
-import type { ProviderId } from '../../domain/ids';
+import type { CredentialOwner } from '../../domain/ids';
 import type { CredentialStore } from '../../ports/credential-store';
 import type { ToiDatabase } from './db';
 
@@ -9,17 +9,17 @@ export class DexieCredentialStore implements CredentialStore {
     this.#db = db;
   }
 
-  async get(provider: ProviderId): Promise<string | null> {
-    const row = await this.#db.credentials.get(provider);
+  async get(owner: CredentialOwner): Promise<string | null> {
+    const row = await this.#db.credentials.get(owner);
     return row?.apiKey ?? null;
   }
 
-  async set(provider: ProviderId, key: string): Promise<void> {
-    await this.#db.credentials.put({ provider, apiKey: key });
+  async set(owner: CredentialOwner, key: string): Promise<void> {
+    await this.#db.credentials.put({ provider: owner, apiKey: key });
   }
 
-  async delete(provider: ProviderId): Promise<void> {
-    await this.#db.credentials.delete(provider);
+  async delete(owner: CredentialOwner): Promise<void> {
+    await this.#db.credentials.delete(owner);
   }
 
   async clear(): Promise<void> {
