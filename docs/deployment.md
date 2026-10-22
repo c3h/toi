@@ -17,14 +17,11 @@ e as dependências são instaladas pelo lockfile com `npm ci`.
 A branch `main` exige o check `check` antes do merge. Em pushes para ela, ou
 execuções manuais do workflow nessa branch, o CI guarda `dist` como artefato
 `site`. O job `deploy` só começa depois do gate e publica esse mesmo artefato
-com `npm run deploy`. Ao final, tenta conferir HTTPS, o HTML publicado contra o
-build, a CSP e a ausência de relatórios de rede. Se o Cloudflare responder com
-403 e `cf-mitigated: challenge`, o upload permanece concluído e o workflow
-registra um aviso de conferência HTTP pendente. O Bot Fight Mode da zona
-desafia alguns runners; a proteção permanece ativa. Nesse caso, confira a URL
-em um navegador. Qualquer outra resposta inesperada ou divergência falha o job.
-Uma nova execução de produção espera
-a anterior terminar; atualizar um pull request cancela seu CI anterior.
+com `npm run deploy`. Não há conferência HTTP depois do upload: o Bot Fight
+Mode da zona desafia os runners do GitHub, e o Toi é de uso pessoal. Confira a
+URL no navegador quando a mudança mexer em headers. Uma nova execução de
+produção espera a anterior terminar; atualizar um pull request cancela seu CI
+anterior.
 
 O ambiente GitHub `production` aceita somente branches protegidas; `main` é
 a única branch protegida. Ele guarda o segredo `CLOUDFLARE_API_TOKEN` e a
@@ -55,7 +52,7 @@ a enviar relatórios de rede ao Cloudflare.
 3. Proteja a branch de produção com o CI. No GitHub, crie o ambiente `production`,
    limitado a essa branch, e configure a variável e o segredo descritos acima
    com sua conta e um token restrito à publicação. Ajuste também a URL do ambiente
-   e da verificação no workflow para seu domínio.
+   no workflow para seu domínio.
 4. Desative NEL na zona Cloudflare e confira HTTPS, HTML e headers na URL publicada.
 
 O domínio precisa estar na conta Cloudflare que publica o Worker. Para publicar
@@ -65,8 +62,8 @@ de `npm run deploy`.
 ## Falha e reversão
 
 Um CI que falha impede o merge; uma falha no gate impede o job de deploy.
-Falha na publicação ou na conferência final aparece no Actions: confira a URL
-e a versão no Cloudflare antes de decidir a reversão. Para voltar uma mudança,
+Falha na publicação aparece no Actions: confira a URL e a versão no Cloudflare
+antes de decidir a reversão. Para voltar uma mudança,
 reverta o commit por pull request e deixe o pipeline publicar novamente.
 Para uma reversão imediata, use o rollback de
 uma versão anterior na aba Deployments do Worker e depois reverta o código.
