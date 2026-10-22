@@ -2,6 +2,7 @@ import { appError } from '../domain/error';
 import type { ConversationId, ProviderId } from '../domain/ids';
 import type { ChatProvider } from '../ports/chat-provider';
 import type { Locks } from '../ports/locks';
+import type { WebTools } from '../ports/web-tools';
 import { conversationWriteLocks, withLocks } from './locks';
 import {
   startRetryMessage,
@@ -31,9 +32,11 @@ export interface FlowControl extends Flow {
   exclusive<T>(task: () => Promise<T>, conversationId?: ConversationId): Promise<T>;
 }
 
-export interface FlowDeps extends Omit<RunDeps, 'provider'> {
+export interface FlowDeps extends Omit<RunDeps, 'provider' | 'tools'> {
   /** Provedor conectado, lido a cada `send`/`retry`; `null` sem Chave para ele. */
   provider: (id: ProviderId) => ChatProvider | null;
+  /** Serviço das Ferramentas, lido a cada `send`/`retry`; `null` sem Chave. */
+  tools: () => WebTools | null;
   /** Um Fluxo por Conversa também entre abas; ver `app/locks.ts`. */
   locks: Locks;
 }
@@ -51,7 +54,7 @@ interface Exclusion {
 }
 
 export const createFlow = (deps: FlowDeps): FlowControl => {
-  const { provider: currentProvider, locks, ...runDeps } = deps;
+  const { provider: currentProvider, tools: currentTools, locks, ...runDeps } = deps;
   const exclusions = new Set<Exclusion>();
   let current: InFlight | null = null;
 
@@ -69,9 +72,10 @@ export const createFlow = (deps: FlowDeps): FlowControl => {
       return Promise.reject(appError('flow_busy'));
     }
 
-    // Capturado uma vez: o Fluxo em voo nunca troca de Provedor.
+    // Capturados uma vez: o Fluxo em voo nunca troca de Provedor nem de Serviço.
     const provider = currentProvider(providerId);
     if (provider === null) return Promise.reject(appError('not_connected'));
+    const tools = currentTools();
 
     const flight: InFlight = {
       conversationId,
@@ -85,7 +89,7 @@ export const createFlow = (deps: FlowDeps): FlowControl => {
       try {
         // O lock cobre ler o `seq`, gravar e o Fluxo inteiro; outra aba recebe `flow_busy`.
         return await withLocks(locks, conversationWriteLocks(conversationId), async () => {
-          flight.run = await launch({ ...runDeps, provider }, flight.controller.signal);
+          flight.run = await launch({ ...runDeps, provider, tools }, flight.controller.signal);
           return await flight.run.result;
         });
       } finally {

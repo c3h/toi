@@ -1,6 +1,7 @@
 import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
 import { anthropic } from './adapters/providers/anthropic/provider';
+import { tinyfish } from './adapters/services/tinyfish/tools';
 import { WebLocks } from './adapters/locks/web';
 import { DexieConversationStore } from './adapters/storage/conversations';
 import { DexieCredentialStore } from './adapters/storage/credentials';
@@ -29,6 +30,8 @@ const boot = async (): Promise<void> => {
     newId,
     locks: new WebLocks(navigator.locks),
     providers: [anthropic],
+    services: [tinyfish],
+    locale: navigator.language,
   });
 
   // Até 300 ms de Fluxo ficam só em memória; sair da página grava o que falta.

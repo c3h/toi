@@ -1,11 +1,13 @@
 import type { Conversation } from '../domain/conversation';
 import { appError } from '../domain/error';
-import type { AttachmentId, ConversationId, ProviderId } from '../domain/ids';
+import type { AttachmentId, ConversationId, ProviderId, ServiceId } from '../domain/ids';
 import type { Message } from '../domain/message';
 import type { Effort, Model, ModelPicks, ModelRef } from '../domain/model';
+import type { ToolSpace } from '../domain/web';
 import type { ChatProvider, ProviderAdapter, ProviderInfo } from '../ports/chat-provider';
 import type { CredentialStore } from '../ports/credential-store';
 import type { SettingsStore } from '../ports/settings-store';
+import type { ServiceAdapter, ServiceInfo, WebTools } from '../ports/web-tools';
 import {
   changeEffort,
   changeModel,
@@ -18,14 +20,17 @@ import { exportHistory } from './export';
 import { createFlow, type Flow, type FlowDeps } from './flow';
 import { conversationWriteLocks, historyEraseLocks, withLocks } from './locks';
 import { recoverInterrupted } from './recover-interrupted';
+import { readToolSpace } from './web-tools';
 
-export type { ProviderInfo };
+export type { ProviderInfo, ServiceInfo };
 
-export interface ToiDeps extends Omit<FlowDeps, 'provider' | 'onUpdate'> {
+export interface ToiDeps extends Omit<FlowDeps, 'provider' | 'tools' | 'onUpdate'> {
   credentials: CredentialStore;
   settings: SettingsStore;
   /** Provedores registrados em `main.tsx`, na ordem em que a UI os oferece. */
   providers: ProviderAdapter[];
+  /** Serviços das Ferramentas registrados em `main.tsx`. */
+  services: ServiceAdapter[];
 }
 
 /**
@@ -34,14 +39,25 @@ export interface ToiDeps extends Omit<FlowDeps, 'provider' | 'onUpdate'> {
  * depende só desta interface; `main.tsx` injeta os adaptadores concretos.
  *
  * `flow` é estável: trocar uma Chave troca o Provedor por dentro. Sem Chave
- * para o Provedor do Modelo, `send`/`retry` recusam com `not_connected`.
+ * para o Provedor do Modelo, `send`/`retry` recusam com `not_connected`. Com
+ * Chave de um Serviço, o envio oferece as Ferramentas dele; sem, não oferece.
  */
 export interface Toi {
   readonly flow: Flow;
   /** O que a UI mostra de cada Provedor registrado; nunca endpoint ou Protocolo. */
   providers(): ProviderInfo[];
-  /** Há Chave para pelo menos um Provedor. */
+  /** Há Chave para pelo menos um Provedor. A Chave de um Serviço não conta: sozinha ela não conversa. */
   connected(): boolean;
+  /** O que a UI mostra de cada Serviço registrado; nunca endpoint. */
+  services(): ServiceInfo[];
+  serviceConnected(service: ServiceId): boolean;
+  /**
+   * Valida e grava a Chave do Serviço. Recusada, ou sem dar para validar agora
+   * (cota, limite por minuto, rede), recusa com o erro e a anterior fica.
+   */
+  connectService(service: ServiceId, apiKey: string, signal?: AbortSignal): Promise<void>;
+  /** Para o Fluxo em voo, que usa a Chave, e a remove. */
+  disconnectService(service: ServiceId): Promise<void>;
   /** Cada Mensagem que esta aba grava ou recebe em Fluxo. Devolve o cancelamento. */
   subscribe(listener: (message: Message) => void): () => void;
   /** Cache de Modelos dos Provedores conectados; `null` sem conexão ou se falta a listagem de algum. */
@@ -57,6 +73,10 @@ export interface Toi {
   /** As famílias que cada Provedor registrado sugere. */
   defaultModelPicks(): ModelPicks;
   saveModelPicks(picks: ModelPicks): Promise<void>;
+  /** Quanto as Rodadas de uma resposta podem ocupar; `DEFAULT_TOOL_SPACE` até a pessoa escolher. */
+  toolSpace(): Promise<ToolSpace>;
+  /** Vale a partir do próximo envio, também em outra aba. */
+  saveToolSpace(space: ToolSpace): Promise<void>;
   /** Troca o Modelo da Conversa e passa a ser o default das próximas. */
   changeModel(id: ConversationId, model: ModelRef): Promise<Conversation | null>;
   /** Troca o Esforço da Conversa e passa a ser o default das próximas. */
@@ -85,11 +105,15 @@ export const createToi = async (deps: ToiDeps): Promise<Toi> => {
   const infos = deps.providers.map((adapter) => adapter.info);
   const adapters = new Map(deps.providers.map((adapter) => [adapter.info.id, adapter]));
   const connections = new Map<ProviderId, ChatProvider>();
+  const services = new Map(deps.services.map((adapter) => [adapter.info.id, adapter]));
+  const serviceConnections = new Map<ServiceId, WebTools>();
   const listeners = new Set<(message: Message) => void>();
 
   const flow = createFlow({
     ...deps,
     provider: (id) => connections.get(id) ?? null,
+    // Um Serviço por vez: o primeiro conectado executa as Ferramentas.
+    tools: () => serviceConnections.values().next().value ?? null,
     onUpdate: (message) => {
       for (const listener of listeners) listener(message);
     },
@@ -114,6 +138,11 @@ export const createToi = async (deps: ToiDeps): Promise<Toi> => {
       const key = await deps.credentials.get(adapter.info.id);
       if (key) connections.set(adapter.info.id, adapter.create(key));
     }),
+    // Sem revalidar na abertura: uma Chave recusada aparece na primeira chamada.
+    ...deps.services.map(async (adapter) => {
+      const key = await deps.credentials.get(adapter.info.id);
+      if (key) serviceConnections.set(adapter.info.id, adapter.create(key));
+    }),
     recoverInterrupted(deps),
   ]);
 
@@ -136,6 +165,8 @@ export const createToi = async (deps: ToiDeps): Promise<Toi> => {
     flow,
     providers: () => infos,
     connected: () => connections.size > 0,
+    services: () => deps.services.map((adapter) => adapter.info),
+    serviceConnected: (service) => serviceConnections.has(service),
 
     subscribe(listener) {
       listeners.add(listener);
@@ -173,6 +204,10 @@ export const createToi = async (deps: ToiDeps): Promise<Toi> => {
     defaultModelPicks: () => defaultPicks,
 
     saveModelPicks: (picks) => deps.settings.saveModelPicks(picks),
+
+    toolSpace: () => readToolSpace(deps.settings),
+
+    saveToolSpace: (space) => deps.settings.saveToolSpace(space),
 
     async changeModel(id, model) {
       const [updated] = await Promise.all([
@@ -226,6 +261,28 @@ export const createToi = async (deps: ToiDeps): Promise<Toi> => {
         connections.delete(providerId);
       }),
 
+    async connectService(serviceId, apiKey, signal = new AbortController().signal) {
+      const adapter = services.get(serviceId);
+      if (!adapter) throw new Error(`Serviço ${serviceId} não registrado.`);
+
+      const key = apiKey.trim();
+      if (!key) throw appError('tool_invalid_credential');
+
+      const tools = adapter.create(key);
+      await tools.verify(signal);
+      // Desistir durante a validação vale mesmo se ela acabou de passar.
+      signal.throwIfAborted();
+      await deps.credentials.set(serviceId, key);
+      serviceConnections.set(serviceId, tools);
+    },
+
+    // Outra aba com o Serviço segue usando a Chave até recarregar, como a do Provedor.
+    disconnectService: (serviceId) =>
+      flow.exclusive(async () => {
+        await deps.credentials.delete(serviceId);
+        serviceConnections.delete(serviceId);
+      }),
+
     eraseConversations: () => guarded(() => eraseConversations(deps.store)),
 
     eraseAll: () =>
@@ -235,6 +292,7 @@ export const createToi = async (deps: ToiDeps): Promise<Toi> => {
         } finally {
           // Falha parcial ainda desconecta: "apagar tudo" erra para o lado da Chave fora.
           connections.clear();
+          serviceConnections.clear();
         }
       }),
 

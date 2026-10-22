@@ -2,9 +2,14 @@ import { describe, expect, it } from 'vitest';
 import { WebLocks } from '../src/adapters/locks/web';
 import type { HistoryExport } from '../src/app/export';
 import { createToi, type ToiDeps } from '../src/app/toi';
+import { tinyfishInfo } from '../src/adapters/services/tinyfish/info';
+import { appError } from '../src/domain/error';
+import { DEFAULT_TOOL_SPACE } from '../src/domain/web';
+import type { ServiceAdapter } from '../src/ports/web-tools';
 import {
   deferred,
   FailingProvider,
+  FakeWebTools,
   flowDeps,
   gatedProvider,
   makeConversation,
@@ -28,6 +33,7 @@ const setup = async () => {
     credentials,
     settings,
     providers: providersOf(() => new ScriptedProvider([])),
+    services: [],
   };
 
   return { store, credentials, settings, clock, deps };
@@ -77,6 +83,90 @@ describe('createToi', () => {
     expect(await credentials.get('anthropic')).toBeNull();
     expect(settings.values.size).toBe(0);
     expect(toi.connected()).toBe(false);
+  });
+
+  it('valida a Chave do Serviço antes de gravar e mantém a anterior quando a nova falha', async () => {
+    const { credentials, deps } = await setup();
+    const created: string[] = [];
+    const service: ServiceAdapter = {
+      info: tinyfishInfo,
+      create: (key) => {
+        created.push(key);
+        const tools = new FakeWebTools();
+        if (key === 'tf-bad') tools.verifyAnswer = appError('tool_invalid_credential');
+        return tools;
+      },
+    };
+    const toi = await createToi({ ...deps, services: [service] });
+    expect(toi.serviceConnected('tinyfish')).toBe(false);
+
+    await toi.connectService('tinyfish', '  tf-good  ');
+    await expect(toi.connectService('tinyfish', 'tf-bad')).rejects.toMatchObject({
+      code: 'tool_invalid_credential',
+    });
+
+    expect(created).toEqual(['tf-good', 'tf-bad']);
+    expect(await credentials.get('tinyfish')).toBe('tf-good');
+    expect(toi.serviceConnected('tinyfish')).toBe(true);
+  });
+
+  it('desistir durante a validação da Chave do Serviço não a grava', async () => {
+    const { credentials, deps } = await setup();
+    const controller = new AbortController();
+    const service: ServiceAdapter = {
+      info: tinyfishInfo,
+      create: () => {
+        const tools = new FakeWebTools();
+        // A validação passa, mas a pessoa desistiu enquanto ela corria.
+        tools.verifyAnswer = async () => controller.abort();
+        return tools;
+      },
+    };
+    const toi = await createToi({ ...deps, services: [service] });
+
+    await expect(toi.connectService('tinyfish', 'tf-key', controller.signal)).rejects.toMatchObject({
+      name: 'AbortError',
+    });
+
+    expect(await credentials.get('tinyfish')).toBeNull();
+    expect(toi.serviceConnected('tinyfish')).toBe(false);
+  });
+
+  it('carrega a Chave do Serviço na abertura e apagar tudo a remove', async () => {
+    const { credentials, deps } = await setup();
+    await credentials.set('tinyfish', 'tf-key');
+    const service: ServiceAdapter = { info: tinyfishInfo, create: () => new FakeWebTools() };
+
+    const toi = await createToi({ ...deps, services: [service] });
+    expect(toi.serviceConnected('tinyfish')).toBe(true);
+
+    await toi.eraseAll();
+
+    expect(await credentials.get('tinyfish')).toBeNull();
+    expect(toi.serviceConnected('tinyfish')).toBe(false);
+  });
+
+  it('remover a Chave do Serviço desconecta só ele', async () => {
+    const { credentials, deps } = await setup();
+    await credentials.set('anthropic', 'sk-test');
+    await credentials.set('tinyfish', 'tf-key');
+    const service: ServiceAdapter = { info: tinyfishInfo, create: () => new FakeWebTools() };
+    const toi = await createToi({ ...deps, services: [service] });
+
+    await toi.disconnectService('tinyfish');
+
+    expect(await credentials.get('tinyfish')).toBeNull();
+    expect(toi.serviceConnected('tinyfish')).toBe(false);
+    expect(toi.connected()).toBe(true);
+  });
+
+  it('o espaço da busca começa no padrão e guarda a escolha', async () => {
+    const { deps } = await setup();
+    const toi = await createToi(deps);
+
+    expect(await toi.toolSpace()).toBe(DEFAULT_TOOL_SPACE);
+    await toi.saveToolSpace(80_000);
+    expect(await toi.toolSpace()).toBe(80_000);
   });
 
   it('apagar outra Conversa não interrompe o Fluxo em voo', async () => {

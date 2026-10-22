@@ -1,12 +1,15 @@
 import { describe, expect, it } from 'vitest';
 import {
+  continuationOf,
   elisionMarker,
+  resultElisionMarker,
   selectHistory,
   toChatRequest,
   type SelectedMessage,
+  type SelectedPart,
 } from '../src/app/build-request';
 import type { AttachmentUpload } from '../src/domain/attachment';
-import { attachmentsOf, type Message } from '../src/domain/message';
+import type { Message, Part } from '../src/domain/message';
 import type { Model } from '../src/domain/model';
 import { filePart, imageFile, makeMessage, pdfFile, testModel, textFile } from './helpers';
 
@@ -46,6 +49,7 @@ describe('selectHistory', () => {
       model: model(),
       effort: 'low',
       estimator,
+      toolSpace: null,
     });
 
     expect(request.messages).toEqual([
@@ -66,6 +70,7 @@ describe('selectHistory', () => {
       model: model(),
       effort: 'low',
       estimator,
+      toolSpace: null,
     });
 
     expect(request.messages).toEqual([{ role: 'user', parts: [text('pergunta')] }]);
@@ -77,6 +82,7 @@ describe('selectHistory', () => {
       model: model({ maxTokens: 100_000 }),
       effort: 'low',
       estimator,
+      toolSpace: null,
     });
     expect(high.maxTokens).toBe(8_192);
 
@@ -85,6 +91,7 @@ describe('selectHistory', () => {
       model: model({ maxTokens: 4_096 }),
       effort: 'low',
       estimator,
+      toolSpace: null,
     });
     expect(low.maxTokens).toBe(4_096);
   });
@@ -101,9 +108,10 @@ describe('selectHistory', () => {
       model: model({ maxInputTokens: 40 }),
       effort: 'low',
       estimator,
+      toolSpace: null,
     });
 
-    expect(truncated).toEqual({ turns: true, attachments: false });
+    expect(truncated).toEqual({ turns: true, attachments: false, results: false });
     expect(request.messages).toEqual([
       { role: 'user', parts: [text('a'.repeat(10))] },
       { role: 'assistant', parts: [text('b'.repeat(10))] },
@@ -127,6 +135,7 @@ describe('selectHistory', () => {
       model: model(),
       effort: 'low',
       estimator,
+      toolSpace: null,
     });
 
     expect(request.messages).toEqual([
@@ -158,8 +167,10 @@ const turn = (seq: number, files: AttachmentUpload[], text = `pergunta ${seq}`):
 /** O histórico termina numa Mensagem do user: tira a resposta do último turno. */
 const history = (...turns: Message[][]): Message[] => turns.flat().slice(0, -1);
 
-const fileNames = (messages: Array<Pick<Message, 'parts'>>) =>
-  messages.flatMap(attachmentsOf).map(({ id }) => id);
+const fileNames = (messages: Array<{ parts: Array<Part | SelectedPart> }>) =>
+  messages.flatMap(({ parts }) =>
+    parts.flatMap((part) => (part.type === 'file' ? [part.attachment.id] : [])),
+  );
 
 const markers = (messages: SelectedMessage[]) =>
   messages.flatMap((message) =>
@@ -199,11 +210,12 @@ describe('selectHistory com Anexos', () => {
       model: model(),
       effort: 'low',
       estimator,
+      toolSpace: null,
     });
 
     expect(fileNames(selected.messages)).toEqual(all.filter((id) => !elided.includes(id)));
     expect(markers(selected.messages)).toHaveLength(elided.length);
-    expect(selected.truncated).toEqual({ turns: false, attachments: true });
+    expect(selected.truncated).toEqual({ turns: false, attachments: true, results: false });
   });
 
   it('com 1 milhão de tokens de contexto cabem 600 páginas', () => {
@@ -212,6 +224,7 @@ describe('selectHistory com Anexos', () => {
       model: model({ maxInputTokens: 1_000_000 }),
       effort: 'low',
       estimator,
+      toolSpace: null,
     });
 
     expect(fileNames(selected.messages)).toEqual(['p1', 'p2']);
@@ -224,6 +237,7 @@ describe('selectHistory com Anexos', () => {
       model: model(),
       effort: 'low',
       estimator,
+      toolSpace: null,
     });
 
     expect(fileNames(selected.messages)).toEqual(['p2']);
@@ -238,11 +252,12 @@ describe('selectHistory com Anexos', () => {
       model: model({ maxInputTokens: 300 }),
       effort: 'low',
       estimator: heavy,
+      toolSpace: null,
     });
 
     expect(fileNames(selected.messages)).toEqual([]);
     expect(selected.messages).toHaveLength(5);
-    expect(selected.truncated).toEqual({ turns: false, attachments: true });
+    expect(selected.truncated).toEqual({ turns: false, attachments: true, results: false });
   });
 });
 
@@ -258,11 +273,13 @@ describe('toChatRequest', () => {
         model: model(),
         effort: 'low',
         estimator,
+        toolSpace: null,
       }),
       async (ids) => {
         read.push(ids);
         return ids.map((id) => blobs.get(id)!);
       },
+      [],
     );
 
     expect(read).toEqual([['i1', 'p1', 't1']]);
@@ -273,6 +290,176 @@ describe('toChatRequest', () => {
     expect(request.messages[0]!.parts).toEqual([
       text(elisionMarker('velho.pdf')),
       text('pergunta 1'),
+    ]);
+  });
+});
+
+const call = (callId: string, query = 'cobre'): Part => ({
+  type: 'tool_call',
+  callId,
+  tool: 'web_search',
+  input: { query },
+});
+
+const result = (callId: string, content = 'achados', url = 'https://a.com/'): Part => ({
+  type: 'tool_result',
+  callId,
+  content,
+  sources: [{ title: 'A', url }],
+  failures: [],
+  error: null,
+});
+
+/** Pergunta, resposta com uma Busca e pergunta seguinte. */
+const withSearch = (answer: Part[], overrides: Partial<Message> = {}): Message[] => [
+  makeMessage({ id: 'u1', conversationId, seq: 1, role: 'user', parts: [text('q1')] }),
+  makeMessage({ id: 'a1', conversationId, seq: 2, role: 'assistant', parts: answer, ...overrides }),
+  makeMessage({ id: 'u2', conversationId, seq: 3, role: 'user', parts: [text('q2')] }),
+];
+
+const searched: Part[] = [text('vou buscar'), call('t1'), result('t1'), text('achei')];
+
+describe('selectHistory com Ferramentas', () => {
+  it('desdobra as Rodadas da resposta do mesmo Provedor em assistant e user', () => {
+    const request = selectHistory({
+      messages: withSearch(searched),
+      model: model(),
+      effort: 'low',
+      estimator,
+      toolSpace: 40_000,
+    });
+
+    expect(request.messages).toEqual([
+      { role: 'user', parts: [text('q1')] },
+      { role: 'assistant', parts: [text('vou buscar'), call('t1')] },
+      {
+        role: 'user',
+        parts: [
+          {
+            type: 'tool_result',
+            callId: 't1',
+            content: 'achados',
+            isError: false,
+            sources: [{ title: 'A', url: 'https://a.com/' }],
+          },
+        ],
+      },
+      { role: 'assistant', parts: [text('achei')] },
+      { role: 'user', parts: [text('q2')] },
+    ]);
+  });
+
+  it.each([
+    { caso: 'sem Ferramentas no envio', toolSpace: null, overrides: {} },
+    { caso: 'de outro Provedor', toolSpace: 40_000, overrides: { provider: 'outro' } },
+  ])('volta só o texto da resposta $caso', ({ toolSpace, overrides }) => {
+    const request = selectHistory({
+      messages: withSearch(searched, overrides as Partial<Message>),
+      model: model(),
+      effort: 'low',
+      estimator,
+      toolSpace,
+    });
+
+    expect(request.messages[1]).toEqual({
+      role: 'assistant',
+      parts: [text('vou buscar'), text('achei')],
+    });
+  });
+
+  it('corta a resposta interrompida a partir da chamada sem resultado', () => {
+    const request = selectHistory({
+      messages: withSearch([call('t1'), result('t1'), text('meio'), call('t2'), text('perdido')], {
+        status: 'interrupted',
+      }),
+      model: model(),
+      effort: 'low',
+      estimator,
+      toolSpace: 40_000,
+    });
+
+    const shape = request.messages
+      .slice(1, -1)
+      .map(({ role, parts }) => [role, parts.map((part) => part.type)]);
+    expect(shape).toEqual([
+      ['assistant', ['tool_call']],
+      ['user', ['tool_result']],
+      ['assistant', ['text']],
+    ]);
+  });
+
+  it.each<{ caso: string; answer: Part[]; expected: SelectedMessage[] }>([
+    {
+      caso: 'termina em resultado',
+      answer: [text('vou buscar'), call('t1'), result('t1')],
+      expected: [
+        { role: 'user', parts: [text('q1')] },
+        { role: 'assistant', parts: [text('vou buscar')] },
+        { role: 'user', parts: [text('q2')] },
+      ],
+    },
+    {
+      caso: 'só tem a Rodada de Ferramenta',
+      answer: [call('t1'), result('t1')],
+      expected: [{ role: 'user', parts: [text('q1'), text('q2')] }],
+    },
+  ])('resposta antiga que $caso volta sem as Rodadas finais', ({ answer, expected }) => {
+    const request = selectHistory({
+      messages: withSearch(answer, { status: 'interrupted' }),
+      model: model(),
+      effort: 'low',
+      estimator,
+      toolSpace: 40_000,
+    });
+
+    expect(request.messages).toEqual(expected);
+  });
+
+  it('troca resultado antigo por marcador com as Fontes antes de cortar turnos', () => {
+    // 80% de 500 são 400; o espaço das Rodadas leva 300 e sobram 100 ao histórico.
+    const { truncated, messages } = selectHistory({
+      messages: withSearch([call('t1'), result('t1', 'r'.repeat(1_000)), text('fim')]),
+      model: model({ maxInputTokens: 500 }),
+      effort: 'low',
+      estimator,
+      toolSpace: 300,
+    });
+
+    expect(truncated).toEqual({ turns: false, attachments: false, results: true });
+    expect(messages[2]!.parts[0]).toMatchObject({
+      type: 'tool_result',
+      content: resultElisionMarker([{ title: 'A', url: 'https://a.com/' }]),
+    });
+  });
+});
+
+describe('espaço das Rodadas', () => {
+  it('sai do orçamento do histórico, sem passar da metade dele', () => {
+    const select = (toolSpace: number | null) =>
+      selectHistory({
+        messages: [message('1', 1, 'user', 'oi')],
+        model: model({ maxInputTokens: 100_000 }),
+        effort: 'low',
+        estimator,
+        toolSpace,
+      }).toolSpace;
+
+    expect(select(null)).toBeNull();
+    expect(select(20_000)).toBe(20_000);
+    expect(select(80_000)).toBe(40_000);
+  });
+});
+
+describe('continuationOf', () => {
+  it('devolve as Rodadas fechadas com o raciocínio e sem texto vazio', () => {
+    const reasoning: Part = { type: 'reasoning', text: 'pensa', signature: 'sig' };
+
+    expect(continuationOf([reasoning, text(' '), call('t1'), result('t1')])).toEqual([
+      { role: 'assistant', parts: [reasoning, call('t1')] },
+      {
+        role: 'user',
+        parts: [{ type: 'tool_result', callId: 't1', content: 'achados', isError: false }],
+      },
     ]);
   });
 });
