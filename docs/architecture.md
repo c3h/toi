@@ -254,19 +254,19 @@ Implementação: `ui/use-messages.ts` junta deltas por frame; `ui/reveal.ts` dec
 
 | Fronteira | O que testa | Como |
 |---|---|---|
-| `domain` | título, normalização de texto e ritmo da resposta | Vitest puro |
-| `adapters/http`, `protocols`, `providers` | parser SSE, mappers e classificação de erros HTTP | streams SSE montados no teste: texto, `ping`, `error`, evento desconhecido, chunk cortado no meio de um caractere Unicode; casos principais de status; `retry-after` em segundos e em data com clock fixo |
+| `domain` | título, famílias e marcação de Modelos, ritmo da resposta | Vitest puro |
+| `adapters/http`, `protocols`, `providers` | parser SSE, mappers e classificação de erros HTTP | streams SSE montados no teste: texto, `ping`, `error`, evento desconhecido, chunk cortado no meio de um caractere Unicode; casos principais de status; `retry-after` em segundos |
 | `adapters/storage` | contrato da porta, schema, cascata e fronteira da Chave | `MemoryStore` + Dexie com `fake-indexeddb` |
 | `app/build-request` | fusão de papéis, descarte de Mensagens vazias, truncamento | Vitest puro |
 | `app/send-message` | enviar, abortar, falhar, retry, `finished` terminal, falha de persistência, instante do primeiro token | Provedor fake + store em memória |
-| `app/flow` | um Fluxo por vez, `stop` (também antes do Fluxo começar), `flush`, `exclusive`, sem Provedor, duas abas na mesma Conversa | Provedor fake + store em memória; duas instâncias de `Flow` com os mesmos locks simulam duas abas |
-| `app/recover-interrupted` | lock livre, lock ocupado, histórico sendo apagado, Mensagem fechada entre listar e travar | clock fixo + store e locks em memória |
+| `app/flow` | `stop` antes do Fluxo começar, `flush`, duas abas na mesma Conversa | Provedor fake + store em memória; duas instâncias de `Flow` com os mesmos locks simulam duas abas |
+| `app/recover-interrupted` | lock livre, lock ocupado, Mensagem fechada entre listar e travar | clock fixo + store e locks em memória |
 | `adapters/locks` | exclusive, shared e a soltura assíncrona | o mesmo contrato contra o `WebLocks` sobre o `navigator.locks` real do Node e contra o `MemoryLocks` dos testes, que o espelha |
-| `app/export` | formato, Fluxo em voo, ordem e ausência da Chave | store em memória |
-| `app/toi`/`connect` | validar antes de gravar, Chave anterior preservada, histórico, recuperar, apagar só a Conversa em voo, recusar envio durante apagar tudo, recusar limpeza com Fluxo em outra aba, exportar | fakes de store, credencial, settings e Provedor; um caso com Web Locks reais |
+| `app/export` | Fluxo em voo | store em memória |
+| `app/toi`/`connect` | validar antes de gravar, Chave anterior preservada, apagar só a Conversa em voo, recusar envio durante apagar tudo, recusar limpeza com Fluxo em outra aba, exportar no formato `toi.history` sem a Chave | fakes de store, credencial, settings e Provedor; um caso com Web Locks reais |
 | `ui` (puro) | divisão em blocos, a mescla entre store e Fluxo local e a revelação contra traces de rajada | Vitest em Node (`tests/ui-pure.test.ts`, `tests/reveal.test.ts`) |
 | `ui` (componentes) | Markdown seguro (sem HTML cru, links, imagens, `javascript:`), highlight só em bloco fechado, Markdown curado e palavras estáveis no bloco em curso, rodapé só com a resposta inteira, onboarding, enviar, parar com esc, shift+enter, apagar com confirmação | Vitest em modo browser no Chromium (`tests/ui/`), com `createToi` real sobre stores em memória |
-| E2E | enviar, parar e tentar de novo, recarregar no meio do Fluxo, duas abas, exportação sem a Chave, orçamento de long task da §9 | Playwright contra `vite preview` do build (`tests/e2e/`); só `fetch` para a Anthropic é simulado, o resto é o navegador real |
+| E2E | enviar, parar e tentar de novo, recarregar no meio do Fluxo, duas abas, orçamento de long task da §9 | Playwright contra `vite preview` do build (`tests/e2e/`); só `fetch` para a Anthropic é simulado, o resto é o navegador real |
 
 Regras: teste não usa `sleep`; debounce usa fake timers e instantes vêm de clock injetado. Teste de regressão fica vermelho no código anterior. Nada de teste que só confirme wiring.
 
