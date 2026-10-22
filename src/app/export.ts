@@ -1,6 +1,6 @@
-import type { Conversation } from '../domain/conversation';
-import type { AppErrorCode } from '../domain/error';
-import type { ProviderId } from '../domain/ids';
+import type { Attachment, ImageMediaType } from '../domain/attachment';
+import { missingAttachmentError, type AppErrorCode } from '../domain/error';
+import type { AttachmentId, ProviderId } from '../domain/ids';
 import type { Message, Part } from '../domain/message';
 import type { Effort } from '../domain/model';
 import type { StopReason } from '../domain/usage';
@@ -12,14 +12,29 @@ import type { ConversationStore } from '../ports/conversation-store';
  * app: a estrutura é escrita à mão, não derivada do domínio, para que mudar
  * o domínio quebre o mapeamento aqui em vez de mudar o arquivo em silêncio.
  * Enumerações (`StopReason`, `AppErrorCode`, `Effort`) vêm do domínio: acrescentar um
- * valor é compatível. Mudança incompatível sobe `version`.
+ * valor é compatível, como a Parte `file`. Mudança incompatível sobe `version`.
  */
 export const HISTORY_EXPORT_FORMAT = 'toi.history';
 export const HISTORY_EXPORT_VERSION = 1;
 
+export type ExportedAttachment =
+  | {
+      id: string;
+      kind: 'image';
+      name: string;
+      size: number;
+      mediaType: ImageMediaType;
+      width: number;
+      height: number;
+    }
+  | { id: string; kind: 'pdf'; name: string; size: number; pages: number | null }
+  | { id: string; kind: 'text'; name: string; size: number };
+
 export type ExportedPart =
   | { type: 'text'; text: string }
-  | { type: 'reasoning'; text: string; signature: string };
+  | { type: 'reasoning'; text: string; signature: string }
+  /** `data` são os bytes do Anexo em base64, também para texto: o arquivo volta igual. */
+  | { type: 'file'; attachment: ExportedAttachment; data: string };
 
 export interface ExportedMessage {
   id: string;
@@ -71,20 +86,48 @@ export interface ExportDeps {
   clock: Clock;
 }
 
-const exportPart = (part: Part): ExportedPart => {
+const exportAttachment = (attachment: Attachment): ExportedAttachment => {
+  const { id, name, size } = attachment;
+  switch (attachment.kind) {
+    case 'image':
+      return {
+        id,
+        kind: 'image',
+        name,
+        size,
+        mediaType: attachment.mediaType,
+        width: attachment.width,
+        height: attachment.height,
+      };
+    case 'pdf':
+      return { id, kind: 'pdf', name, size, pages: attachment.pages };
+    case 'text':
+      return { id, kind: 'text', name, size };
+  }
+};
+
+type Bytes = Map<AttachmentId, Blob>;
+
+const exportPart = async (part: Part, bytes: Bytes): Promise<ExportedPart> => {
   switch (part.type) {
     case 'text':
       return { type: 'text', text: part.text };
     case 'reasoning':
       return { type: 'reasoning', text: part.text, signature: part.signature };
+    case 'file': {
+      const blob = bytes.get(part.attachment.id);
+      if (!blob) throw missingAttachmentError();
+      const data = (await blob.bytes()).toBase64();
+      return { type: 'file', attachment: exportAttachment(part.attachment), data };
+    }
   }
 };
 
-const exportMessage = (message: Message): ExportedMessage => ({
+const exportMessage = async (message: Message, bytes: Bytes): Promise<ExportedMessage> => ({
   id: message.id,
   seq: message.seq,
   role: message.role,
-  parts: message.parts.map(exportPart),
+  parts: await Promise.all(message.parts.map((part) => exportPart(part, bytes))),
   // O arquivo é um retrato: um Fluxo em voo sai como o que é fora do app, interrompido.
   status: message.status === 'streaming' ? 'interrupted' : message.status,
   createdAt: message.createdAt,
@@ -108,32 +151,47 @@ const exportMessage = (message: Message): ExportedMessage => ({
   },
 });
 
-const exportConversation = (
-  conversation: Conversation,
-  messages: Message[],
-): ExportedConversation => ({
-  id: conversation.id,
-  title: conversation.title,
-  provider: conversation.provider,
-  model: conversation.model,
-  effort: conversation.effort,
-  createdAt: conversation.createdAt,
-  updatedAt: conversation.updatedAt,
-  messages: messages.map(exportMessage),
-});
+/** O JSON de `value` aberto num último campo `key`, um array cujos itens vêm depois. */
+const openArray = (value: object, key: string): string =>
+  `${JSON.stringify(value).slice(0, -1)},${JSON.stringify(key)}:[`;
 
-/** Lê só a porta de Conversas: a Chave não tem caminho até o arquivo. */
-export const exportHistory = async (deps: ExportDeps): Promise<HistoryExport> => {
-  const conversations = await deps.store.listConversations();
-
-  return {
+/**
+ * Lê um retrato transacional da porta de Conversas: a Chave não tem caminho
+ * até o arquivo, e outra aba apagando no meio não deixa o arquivo pela metade.
+ * O JSON sai em pedaços, uma Mensagem por vez, para os Anexos de todo o
+ * histórico nunca virarem uma string só.
+ */
+export const exportHistory = async (deps: ExportDeps): Promise<Blob> => {
+  const snapshot = await deps.store.snapshot();
+  const header: Omit<HistoryExport, 'conversations'> = {
     format: HISTORY_EXPORT_FORMAT,
     version: HISTORY_EXPORT_VERSION,
     exportedAt: deps.clock.now(),
-    conversations: await Promise.all(
-      conversations.map(async (conversation) =>
-        exportConversation(conversation, await deps.store.listMessages(conversation.id)),
-      ),
-    ),
   };
+  const chunks: BlobPart[] = [openArray(header, 'conversations')];
+
+  for (const [index, { conversation, messages }] of snapshot.conversations.entries()) {
+    const head: Omit<ExportedConversation, 'messages'> = {
+      id: conversation.id,
+      title: conversation.title,
+      provider: conversation.provider,
+      model: conversation.model,
+      effort: conversation.effort,
+      createdAt: conversation.createdAt,
+      updatedAt: conversation.updatedAt,
+    };
+    if (index > 0) chunks.push(',');
+    chunks.push(openArray(head, 'messages'));
+
+    for (const [position, message] of messages.entries()) {
+      const json = JSON.stringify(await exportMessage(message, snapshot.attachments));
+      if (position > 0) chunks.push(',');
+      // Como Blob, o texto pode sair da memória do JS antes da próxima Mensagem.
+      chunks.push(new Blob([json]));
+    }
+    chunks.push(']}');
+  }
+  chunks.push(']}');
+
+  return new Blob(chunks, { type: 'application/json' });
 };

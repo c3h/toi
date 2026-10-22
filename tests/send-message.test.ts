@@ -13,9 +13,13 @@ import type { StreamEvent } from '../src/domain/stream';
 import {
   abortError,
   baseDeps,
+  deferred,
+  imageFile,
   MemoryStore,
   ScriptedProvider,
+  sendInput,
   testModel,
+  textFile,
   usage,
 } from './helpers';
 
@@ -28,6 +32,12 @@ const successEvents = (): StreamEvent[] => [
   { type: 'usage', usage: usage(10, 5), stopReason: 'end_turn' },
   { type: 'finished' },
 ];
+
+const ask = (overrides: Partial<SendOptions> = {}): SendOptions => ({
+  ...sendInput(),
+  signal: new AbortController().signal,
+  ...overrides,
+});
 
 const sendMessage = async (deps: RunDeps, options: SendOptions): Promise<RunResult> =>
   (await startSendMessage(deps, options)).result;
@@ -42,14 +52,14 @@ describe('sendMessage', () => {
 
     const result = await sendMessage(
       { ...deps, provider },
-      { conversationId: 'c1', text: 'Pergunta', model: testModel, effort: 'low', signal: new AbortController().signal },
+      ask(),
     );
 
     expect(result.message.status).toBe('complete');
     expect(textOf(result.message)).toBe('Olá, mundo');
     expect(result.message.usage?.outputTokens).toBe(5);
     expect(result.message.stopReason).toBe('end_turn');
-    expect(result.truncated).toBe(false);
+    expect(result.truncated).toBeNull();
     expect(result.persistError).toBeNull();
 
     const messages = await store.listMessages('c1');
@@ -95,7 +105,7 @@ describe('sendMessage', () => {
           if (textOf(message) === 'parcial') signalFirstDelta();
         },
       },
-      { conversationId: 'c1', text: 'Pergunta', model: testModel, effort: 'low', signal: controller.signal },
+      ask({ signal: controller.signal }),
     );
 
     await firstDelta;
@@ -118,7 +128,7 @@ describe('sendMessage', () => {
 
     const result = await sendMessage(
       { ...deps, provider },
-      { conversationId: 'c1', text: 'Pergunta', model: testModel, effort: 'low', signal: new AbortController().signal },
+      ask(),
     );
 
     expect(result.message.status).toBe('failed');
@@ -135,7 +145,7 @@ describe('sendMessage', () => {
 
     const result = await sendMessage(
       { ...deps, provider },
-      { conversationId: 'c1', text: 'Pergunta', model: testModel, effort: 'low', signal: new AbortController().signal },
+      ask(),
     );
 
     expect(result.message.status).toBe('complete');
@@ -165,7 +175,7 @@ describe('sendMessage', () => {
 
     const result = await sendMessage(
       { ...deps, provider },
-      { conversationId: 'c1', text: 'Pergunta', model: testModel, effort: 'low', signal: new AbortController().signal },
+      ask(),
     );
 
     expect(result.message.status).toBe('complete');
@@ -189,7 +199,7 @@ describe('sendMessage', () => {
 
     const result = await sendMessage(
       { ...deps, provider },
-      { conversationId: 'c1', text: 'Pergunta', model: testModel, effort: 'low', signal: new AbortController().signal },
+      ask(),
     );
 
     expect(result.message).toMatchObject({
@@ -215,7 +225,7 @@ describe('sendMessage', () => {
 
     const first = await sendMessage(
       { ...deps, provider },
-      { conversationId: 'c1', text: 'Pergunta', model: testModel, effort: 'low', signal: new AbortController().signal },
+      ask(),
     );
 
     failing = false;
@@ -249,7 +259,7 @@ describe('sendMessage', () => {
     const { store, deps } = await baseDeps();
     const first = await sendMessage(
       { ...deps, provider: new ScriptedProvider(successEvents()) },
-      { conversationId: 'c1', text: 'Pergunta', model: testModel, effort: 'low', signal: new AbortController().signal },
+      ask(),
     );
 
     const other = { ...testModel, id: 'claude-outro' };
@@ -280,5 +290,77 @@ describe('sendMessage', () => {
       provider: 'anthropic',
       model: 'claude-outro',
     });
+  });
+});
+
+describe('sendMessage com Anexos', () => {
+  it('grava os Anexos e manda os bytes antes do texto', async () => {
+    const { store, deps } = await baseDeps();
+    const provider = new ScriptedProvider(successEvents());
+    const files = [imageFile('i1', 3), textFile('t1', '# notas')];
+
+    const result = await sendMessage({ ...deps, provider }, ask({ attachments: files }));
+
+    expect(result.message.status).toBe('complete');
+    const [user] = await store.listMessages('c1');
+    expect(user!.parts).toEqual([
+      { type: 'file', attachment: files[0]!.attachment },
+      { type: 'file', attachment: files[1]!.attachment },
+      { type: 'text', text: 'Pergunta' },
+    ]);
+    expect(store.attachments.get('i1')).toEqual({ conversationId: 'c1', blob: files[0]!.blob });
+    expect(provider.requests[0]!.messages[0]!.parts).toEqual([
+      ...files.map(({ attachment, blob }) => ({ type: 'file', attachment, data: blob })),
+      { type: 'text', text: 'Pergunta' },
+    ]);
+  });
+
+  it('parar enquanto os Anexos são lidos fecha em interrupted sem chegar à rede', async () => {
+    const reading = deferred();
+    const release = deferred();
+    class SlowStore extends MemoryStore {
+      override async readAttachments(ids: string[]): Promise<Blob[]> {
+        reading.resolve();
+        await release.promise;
+        return super.readAttachments(ids);
+      }
+    }
+    const { deps } = await baseDeps(new SlowStore());
+    const provider = new ScriptedProvider(successEvents());
+    const controller = new AbortController();
+
+    const run = await startSendMessage(
+      { ...deps, provider },
+      ask({ attachments: [imageFile('i1')], signal: controller.signal }),
+    );
+    await reading.promise;
+    controller.abort();
+    release.resolve();
+
+    const result = await run.result;
+    expect(result.message.status).toBe('interrupted');
+    expect(provider.requests).toEqual([]);
+  });
+
+  it('Anexo que sumiu do navegador falha a resposta com storage_failed', async () => {
+    const { store, deps } = await baseDeps();
+    const provider = new ScriptedProvider(successEvents());
+    const first = await sendMessage({ ...deps, provider }, ask({ attachments: [imageFile('i1')] }));
+    store.attachments.delete('i1');
+
+    const retried = await retryMessage(
+      { ...deps, provider },
+      {
+        conversationId: 'c1',
+        messageId: first.message.id,
+        model: testModel,
+        effort: 'low',
+        signal: new AbortController().signal,
+      },
+    );
+
+    expect(retried.message.status).toBe('failed');
+    expect(retried.message.error?.code).toBe('storage_failed');
+    expect(provider.requests).toHaveLength(1);
   });
 });

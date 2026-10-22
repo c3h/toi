@@ -1,3 +1,4 @@
+import { exceededLimit, type AttachmentUpload } from '../domain/attachment';
 import { titleFrom, type Conversation } from '../domain/conversation';
 import {
   appError,
@@ -13,14 +14,15 @@ import {
   receiveDelta,
   type Message,
   type MessageStatus,
+  type Part,
 } from '../domain/message';
 import { fieldsOf, refOf, type Effort, type Model, type ModelRef } from '../domain/model';
 import type { ChatProvider } from '../ports/chat-provider';
 import type { Clock } from '../ports/clock';
-import type { ConversationStore } from '../ports/conversation-store';
+import type { ConversationStore, TurnWrite } from '../ports/conversation-store';
 import type { SettingsStore } from '../ports/settings-store';
 import type { TokenEstimator } from '../ports/token-estimator';
-import { buildRequest } from './build-request';
+import { selectHistory, toChatRequest, type Truncation } from './build-request';
 import { createFlusher, type Flusher } from './flusher';
 
 const DEFAULT_FLUSH_INTERVAL_MS = 300;
@@ -40,6 +42,8 @@ export interface RunDeps {
 export interface SendOptions {
   conversationId: ConversationId;
   text: string;
+  /** Já preparados; vão antes do texto, na ordem dada. */
+  attachments: AttachmentUpload[];
   model: Model;
   effort: Effort;
   signal: AbortSignal;
@@ -55,7 +59,7 @@ export interface RetryOptions {
 
 export interface RunResult {
   message: Message;
-  truncated: boolean;
+  truncated: Truncation | null;
   persistError: AppErrorInfo | null;
 }
 
@@ -108,7 +112,7 @@ const runAssistant = async (
 ): Promise<RunResult> => {
   let draft = assistant;
   let finished = false;
-  let truncated = false;
+  let truncated: Truncation | null = null;
   let status: Exclude<MessageStatus, 'streaming'> = 'complete';
   let error: AppErrorInfo | null = null;
 
@@ -119,16 +123,19 @@ const runAssistant = async (
   };
 
   try {
-    const built = buildRequest({
+    const selected = selectHistory({
       messages: history,
       model,
       effort,
       estimator: deps.estimator,
     });
+    truncated = selected.truncated;
 
-    truncated = built.truncated;
+    // Ler os Anexos pode levar tempo com arquivos grandes: parar no meio não chega à rede.
+    const request = await toChatRequest(selected, (ids) => deps.store.readAttachments(ids));
+    signal.throwIfAborted();
 
-    for await (const event of deps.provider.stream(built.request, signal)) {
+    for await (const event of deps.provider.stream(request, signal)) {
       switch (event.type) {
         case 'started':
           apply({ ...draft, model: event.model, usage: event.usage });
@@ -218,22 +225,20 @@ const loadConversation = async (
 };
 
 /** Aponta a Conversa para o Modelo e o Esforço do envio sobre o gravado, sem desfazer outra aba. */
-const aimConversation = async (
-  store: ConversationStore,
-  id: ConversationId,
-  model: ModelRef,
-  effort: Effort,
-  now: number,
-  title?: string,
-): Promise<void> => {
-  const updated = await store.updateConversation(id, (current) => ({
+const aim =
+  (model: ModelRef, effort: Effort, now: number, title?: string) =>
+  (current: Conversation): Conversation => ({
     ...current,
     ...fieldsOf(model),
     effort,
     title: title ?? current.title,
     updatedAt: now,
-  }));
-  if (!updated) throw new Error(`Conversa ${id} não encontrada.`);
+  });
+
+/** Grava a mudança na Conversa, as Mensagens e os Anexos numa transação só. */
+const startTurn = async (store: ConversationStore, turn: TurnWrite): Promise<void> => {
+  const updated = await store.startTurn(turn);
+  if (!updated) throw new Error(`Conversa ${turn.conversationId} não encontrada.`);
 };
 
 /**
@@ -255,18 +260,27 @@ export const startSendMessage = async (
   options: SendOptions,
 ): Promise<MessageRun> => {
   const text = options.text.trim();
-  if (!text) throw new Error('sendMessage recebeu texto vazio.');
+  const files = options.attachments.map(({ attachment }) => attachment);
+  if (!text && files.length === 0) throw new Error('sendMessage recebeu uma Mensagem vazia.');
+  if (exceededLimit(files) !== null) {
+    throw new Error('sendMessage recebeu Anexos acima dos limites de uma Mensagem.');
+  }
 
   const { conversation, messages } = await loadConversation(deps.store, options.conversationId);
   const now = deps.clock.now();
   const seq = nextSeq(messages);
+
+  const parts: Part[] = [
+    ...files.map((attachment): Part => ({ type: 'file', attachment })),
+    ...(text ? [{ type: 'text' as const, text }] : []),
+  ];
 
   const user: Message = {
     id: deps.newId(),
     conversationId: conversation.id,
     seq,
     role: 'user',
-    parts: [{ type: 'text', text }],
+    parts,
     status: 'complete',
     createdAt: now,
     completedAt: now,
@@ -286,19 +300,16 @@ export const startSendMessage = async (
     now,
   );
 
-  await aimConversation(
-    deps.store,
-    conversation.id,
-    options.model,
-    options.effort,
-    now,
-    messages.length === 0 ? titleFrom(text) : undefined,
-  );
+  const title = messages.length === 0 ? titleFrom(text || files[0]!.name) : undefined;
   await Promise.all([
     rememberChoice(deps.settings, refOf(options.model), options.effort),
-    deps.store.putMessage(user),
+    startTurn(deps.store, {
+      conversationId: conversation.id,
+      change: aim(options.model, options.effort, now, title),
+      messages: [user, assistant],
+      attachments: options.attachments,
+    }),
   ]);
-  await deps.store.putMessage(assistant);
   deps.onUpdate?.(user);
   deps.onUpdate?.(assistant);
 
@@ -335,10 +346,14 @@ export const startRetryMessage = async (
   // A tentativa é do destino atual desde a primeira gravação, mesmo se falhar antes de `started`.
   const assistant = streamingAssistant(target, options.model, options.effort, now);
 
-  await aimConversation(deps.store, conversation.id, options.model, options.effort, now);
   await Promise.all([
     rememberChoice(deps.settings, refOf(options.model), options.effort),
-    deps.store.putMessage(assistant),
+    startTurn(deps.store, {
+      conversationId: conversation.id,
+      change: aim(options.model, options.effort, now),
+      messages: [assistant],
+      attachments: [],
+    }),
   ]);
   deps.onUpdate?.(assistant);
 

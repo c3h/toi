@@ -1,6 +1,6 @@
 import type { Conversation } from '../domain/conversation';
 import { appError } from '../domain/error';
-import type { ConversationId, ProviderId } from '../domain/ids';
+import type { AttachmentId, ConversationId, ProviderId } from '../domain/ids';
 import type { Message } from '../domain/message';
 import type { Effort, Model, ModelPicks, ModelRef } from '../domain/model';
 import type { ChatProvider, ProviderAdapter, ProviderInfo } from '../ports/chat-provider';
@@ -14,7 +14,7 @@ import {
   renameConversation,
 } from './conversations';
 import { eraseAll, eraseConversations } from './erase';
-import { exportHistory, type HistoryExport } from './export';
+import { exportHistory } from './export';
 import { createFlow, type Flow, type FlowDeps } from './flow';
 import { conversationWriteLocks, historyEraseLocks, withLocks } from './locks';
 import { recoverInterrupted } from './recover-interrupted';
@@ -75,8 +75,10 @@ export interface Toi {
   disconnect(provider: ProviderId): Promise<void>;
   eraseConversations(): Promise<void>;
   eraseAll(): Promise<void>;
-  /** Retrato do histórico no formato versionado de `app/export.ts`; nunca inclui a Chave. */
-  exportHistory(): Promise<HistoryExport>;
+  /** Os bytes de um Anexo, para a UI mostrar ou baixar. */
+  attachment(id: AttachmentId): Promise<Blob>;
+  /** Arquivo JSON do histórico no formato versionado de `app/export.ts`; nunca inclui a Chave. */
+  exportHistory(): Promise<Blob>;
 }
 
 export const createToi = async (deps: ToiDeps): Promise<Toi> => {
@@ -235,6 +237,11 @@ export const createToi = async (deps: ToiDeps): Promise<Toi> => {
           connections.clear();
         }
       }),
+
+    async attachment(id) {
+      const [blob] = await deps.store.readAttachments([id]);
+      return blob!;
+    },
 
     exportHistory: () => exportHistory(deps),
   };

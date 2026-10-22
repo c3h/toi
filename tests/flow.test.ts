@@ -6,7 +6,7 @@ import {
   gatedProvider,
   replyEvents,
   ScriptedProvider,
-  testModel,
+  sendInput,
 } from './helpers';
 
 describe('createFlow', () => {
@@ -15,7 +15,7 @@ describe('createFlow', () => {
     const { provider, delta } = gatedProvider();
     const flow = createFlow({ ...deps, provider: () => provider });
 
-    const pending = flow.send({ conversationId: 'c1', text: 'Pergunta', model: testModel, effort: 'low' });
+    const pending = flow.send(sendInput());
 
     await delta;
     expect(flow.active()).toBe('c1');
@@ -39,7 +39,7 @@ describe('createFlow', () => {
     const provider = new ScriptedProvider(replyEvents());
     const flow = createFlow({ ...deps, provider: () => provider });
 
-    const pending = flow.send({ conversationId: 'c1', text: 'Pergunta', model: testModel, effort: 'low' });
+    const pending = flow.send(sendInput());
     await flow.stop();
 
     const result = await pending;
@@ -54,11 +54,11 @@ describe('createFlow', () => {
     const tabA = createFlow({ ...deps, provider: () => provider });
     const tabB = createFlow({ ...deps, provider: () => provider });
 
-    const pending = tabA.send({ conversationId: 'c1', text: 'Pergunta', model: testModel, effort: 'low' });
+    const pending = tabA.send(sendInput());
     await delta;
 
     await expect(
-      tabB.send({ conversationId: 'c1', text: 'Outra', model: testModel, effort: 'low' }),
+      tabB.send(sendInput({ text: 'Outra' })),
     ).rejects.toMatchObject({ code: 'flow_busy' });
     expect(tabB.active()).toBeNull();
 

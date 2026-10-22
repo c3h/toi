@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { WebLocks } from '../src/adapters/locks/web';
+import type { HistoryExport } from '../src/app/export';
 import { createToi, type ToiDeps } from '../src/app/toi';
 import {
   deferred,
@@ -13,6 +14,7 @@ import {
   providersOf,
   replyEvents,
   ScriptedProvider,
+  sendInput,
   testModel,
 } from './helpers';
 
@@ -86,7 +88,7 @@ describe('createToi', () => {
     const { provider, delta } = gatedProvider();
     const toi = await createToi({ ...deps, providers: providersOf(() => provider) });
 
-    const pending = toi.flow.send({ conversationId: 'c1', text: 'Pergunta', model: testModel, effort: 'low' });
+    const pending = toi.flow.send(sendInput());
     await delta;
 
     await toi.deleteConversation('c2');
@@ -106,7 +108,7 @@ describe('createToi', () => {
     const { provider, delta } = gatedProvider();
     const toi = await createToi({ ...deps, providers: providersOf(() => provider) });
 
-    const pending = toi.flow.send({ conversationId: 'c1', text: 'Pergunta', model: testModel, effort: 'low' });
+    const pending = toi.flow.send(sendInput());
     await delta;
 
     await toi.deleteConversation('c1');
@@ -136,7 +138,7 @@ describe('createToi', () => {
     const erasing = toi.eraseAll();
 
     await expect(
-      toi.flow.send({ conversationId: 'c1', text: 'Pergunta', model: testModel, effort: 'low' }),
+      toi.flow.send(sendInput()),
     ).rejects.toMatchObject({ code: 'flow_busy' });
 
     store.release();
@@ -144,7 +146,7 @@ describe('createToi', () => {
 
     expect(await store.listMessages('c1')).toEqual([]);
     await expect(
-      toi.flow.send({ conversationId: 'c1', text: 'Pergunta', model: testModel, effort: 'low' }),
+      toi.flow.send(sendInput()),
     ).rejects.toMatchObject({ code: 'not_connected' });
   });
 
@@ -157,7 +159,7 @@ describe('createToi', () => {
     const tabA = await createToi({ ...deps, providers: providersOf(() => provider) });
     const tabB = await createToi(deps);
 
-    const pending = tabA.flow.send({ conversationId: 'c1', text: 'Pergunta', model: testModel, effort: 'low' });
+    const pending = tabA.flow.send(sendInput());
     await delta;
 
     await expect(tabB.eraseConversations()).rejects.toMatchObject({ code: 'flow_busy' });
@@ -180,9 +182,10 @@ describe('createToi', () => {
       ...deps,
       providers: providersOf(() => new ScriptedProvider(replyEvents())),
     });
-    await toi.flow.send({ conversationId: 'c1', text: 'Pergunta', model: testModel, effort: 'low' });
+    await toi.flow.send(sendInput());
 
-    const exported = await toi.exportHistory();
+    const file = await (await toi.exportHistory()).text();
+    const exported = JSON.parse(file) as HistoryExport;
 
     expect(exported).toMatchObject({ format: 'toi.history', version: 1, exportedAt: 50_000 });
     expect(exported.conversations).toHaveLength(1);
@@ -192,7 +195,7 @@ describe('createToi', () => {
       ['user', [{ type: 'text', text: 'Pergunta' }]],
       ['assistant', [{ type: 'text', text: 'Olá' }]],
     ]);
-    expect(JSON.stringify(exported)).not.toContain('sk-secret');
+    expect(file).not.toContain('sk-secret');
   });
 
   it('com Web Locks reais, apagar Conversas para o próprio Fluxo e limpa', async () => {
@@ -207,7 +210,7 @@ describe('createToi', () => {
       providers: providersOf(() => provider),
     });
 
-    const pending = toi.flow.send({ conversationId: 'c1', text: 'Pergunta', model: testModel, effort: 'low' });
+    const pending = toi.flow.send(sendInput());
     await delta;
 
     await toi.eraseConversations();
@@ -231,7 +234,7 @@ describe('createToi', () => {
     });
     const toi = await createToi({ ...deps, providers: providersOf(() => provider) });
 
-    const pending = toi.flow.send({ conversationId: 'c1', text: 'Pergunta', model: testModel, effort: 'low' });
+    const pending = toi.flow.send(sendInput());
     await delta.promise;
     await toi.changeModel('c1', { provider: 'anthropic', id: 'claude-outro' });
     await toi.renameConversation('c1', 'Renomeada');
