@@ -4,9 +4,9 @@ import { asAppError, toErrorInfo, type AppErrorInfo } from '../domain/error';
 export const errorInfo = (error: unknown): AppErrorInfo =>
   toErrorInfo(asAppError(error));
 
-/** Pede para o navegador não descartar o histórico; negar ou não suportar dá `false` e não bloqueia nada. */
+/** Pede para o navegador não descartar o histórico; negar dá `false` e não bloqueia nada. */
 export const requestPersistence = (): Promise<boolean> =>
-  navigator.storage?.persist?.().catch(() => false) ?? Promise.resolve(false);
+  navigator.storage.persist().catch(() => false);
 
 const SELECTED_KEY = 'toi:selected';
 

@@ -173,7 +173,7 @@ IndexedDB via Dexie. O schema está em `src/adapters/storage/db.ts`: `conversati
 | `settings` | último Modelo, cache de Modelos por Provedor, Modelos do seletor | Chave |
 | `credentials` | Provedor → Chave | Qualquer dado de Conversa |
 
-**Formato gravado:** o adaptador converte o domínio para registros escritos à mão (`adapters/storage/records.ts`) e de volta; mudar a forma gravada é uma nova `version(n)` com `upgrade()` em `db.ts` ([ADR 0007](adr/0007-explicit-persisted-formats.md)).
+**Formato gravado:** o adaptador converte o domínio para registros escritos à mão (`adapters/storage/records.ts`) e de volta; como mudar a forma gravada está no [ADR 0007](adr/0007-explicit-persisted-formats.md).
 
 **Erro serializável:** `Message.error` guarda `AppErrorInfo` — código, mensagem, detalhe e `retryAfterSeconds` —, um objeto plano. Structured clone não preserva protótipo de classe; ler do IndexedDB e usar `instanceof AppError` falharia.
 
@@ -256,7 +256,7 @@ Implementação: `ui/use-messages.ts` junta deltas por frame; `ui/blocks.ts` div
 |---|---|---|
 | `domain` | título, normalização de texto e expiração do lease | Vitest puro |
 | `adapters/http`, `protocols`, `providers` | parser SSE, mappers e classificação de erros HTTP | streams SSE montados no teste: texto, `ping`, `error`, evento desconhecido, chunk cortado no meio de um caractere Unicode; casos principais de status; `retry-after` em segundos e em data com clock fixo |
-| `adapters/storage` | contrato da porta, schema, migração da v1, cascata e fronteira da Chave | `MemoryStore` + Dexie com `fake-indexeddb` |
+| `adapters/storage` | contrato da porta, schema, cascata e fronteira da Chave | `MemoryStore` + Dexie com `fake-indexeddb` |
 | `app/build-request` | fusão de papéis, descarte de Mensagens vazias, truncamento | Vitest puro |
 | `app/send-message` | enviar, abortar, falhar, retry, `finished` terminal, falha de persistência | Provedor fake + store em memória |
 | `app/flow` | um Fluxo por vez, `stop` (também antes do Fluxo começar), `flush`, `exclusive`, sem Provedor, duas abas na mesma Conversa | Provedor fake + store em memória; duas instâncias de `Flow` com os mesmos locks simulam duas abas |
@@ -280,7 +280,7 @@ Tudo da tabela está instalado. `npm run check` roda typecheck, Vitest (Node e b
 | Fontes: Geist Mono e Lora (`@fontsource-variable`) | as do blog, servidas pela própria origem |
 | Estado: hooks sobre `Toi` | o app já é a fonte da verdade; uma store de UI duplicaria o estado do Fluxo. `toi.watch*` entrega o que está gravado (também por outra aba) e `toi.subscribe` o Fluxo desta aba antes do flush; `ui/merge.ts` decide qual vale |
 | Coordenação entre abas: Web Locks | o navegador solta o lock quando a página morre; sem dependência ([ADR 0006](adr/0006-web-locks-cross-tab.md)) |
-| Persistência: Dexie | schema versionado e migrações no IndexedDB |
+| Persistência: Dexie | schema e índices declarados no IndexedDB |
 | Markdown: react-markdown + remark-gfm | sem HTML cru |
 | Código: Shiki lazy (`shiki/core` + engine JS) | highlight correto sem wasm e sem peso no carregamento inicial |
 | Ícones: lucide-react | já usado nos projetos |

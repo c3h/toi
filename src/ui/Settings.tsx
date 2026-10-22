@@ -165,7 +165,7 @@ export default function Settings({
   }, [section]);
 
   useEffect(() => {
-    void navigator.storage?.persisted?.().then(setPersisted, () => setPersisted(null));
+    void navigator.storage.persisted().then(setPersisted, () => setPersisted(null));
   }, []);
 
   const run = async (task: () => Promise<void>, message: string | null) => {

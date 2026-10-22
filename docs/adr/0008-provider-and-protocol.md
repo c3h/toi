@@ -15,7 +15,7 @@ A identidade de um Modelo passa a ser `{ provider, id }`: ids colidem entre Prov
 - `Message.provider` é quem gerou a resposta do assistant e fica `null` na do user, como `model`. Não lista todos os serviços que receberam o texto.
 - `Model` carrega `provider` e `family`. A família é preenchida pelo Provedor; o domínio deixou de conhecer o prefixo `claude-`.
 - Cache de Modelos é por Provedor (`models:<provider>`); `lastModel` e as marcações do seletor guardam refs com Provedor.
-- O banco sobe para `version(2)`: o `upgrade()` atribui à Anthropic as Conversas e as respostas existentes, converte `lastModel` e descarta o cache de Modelos, que é listado de novo.
+- O registro do IndexedDB grava `provider` na Conversa e na Mensagem ([ADR 0007](0007-explicit-persisted-formats.md)).
 - A exportação ganha `provider` como campo novo, compatível, sem subir `version`.
 
 A UI recebe só `ProviderInfo` via `Toi`: nome com as formas contraídas ("da Anthropic", "à Anthropic"), placeholder e link da Chave e as famílias sugeridas. Nunca endpoint, header ou Protocolo.
@@ -24,7 +24,7 @@ A UI recebe só `ProviderInfo` via `Toi`: nome com as formas contraídas ("da An
 
 - **Um adaptador por Provedor, sem Protocolo**: menos camadas hoje, mas o OpenCode Go repetiria três parsers que já existiriam em outros adaptadores.
 - **Copy genérica ("seu provedor")**: dispensaria o descritor, mas enfraquece a promessa de privacidade, que é verificável justamente porque nomeia o destino.
-- **Ler `provider` ausente como Anthropic, sem migração**: evitaria o `upgrade()`, mas deixaria um fallback permanente na leitura, contra o [ADR 0007](0007-explicit-persisted-formats.md).
+- **Ler `provider` ausente como Anthropic**: deixaria um fallback permanente na leitura, contra o [ADR 0007](0007-explicit-persisted-formats.md).
 
 ## Consequences
 

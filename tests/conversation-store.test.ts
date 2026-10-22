@@ -1,5 +1,4 @@
 import 'fake-indexeddb/auto';
-import Dexie from 'dexie';
 import { describe, expect, it } from 'vitest';
 import { DexieConversationStore } from '../src/adapters/storage/conversations';
 import { ToiDatabase } from '../src/adapters/storage/db';
@@ -83,7 +82,7 @@ describe('DexieConversationStore: fronteira da Chave', () => {
       expect(await settings.lastModel()).toEqual({ provider: 'anthropic', id: testModel.id });
     }));
 
-  it('DexieSettingsStore guarda o que o seletor oferece e ignora valor ilegível', () =>
+  it('DexieSettingsStore guarda o que o seletor oferece', () =>
     withDb(async (db) => {
       const settings = new DexieSettingsStore(db);
       expect(await settings.modelPicks()).toBeNull();
@@ -94,71 +93,5 @@ describe('DexieConversationStore: fronteira da Chave', () => {
       };
       await settings.saveModelPicks(picks);
       expect(await settings.modelPicks()).toEqual(picks);
-
-      await db.settings.put({ key: 'modelPicks', value: { families: ['sonnet'], models: [] } });
-      expect(await settings.modelPicks()).toBeNull();
     }));
-
-  it('a v2 do banco atribui à Anthropic o que a v1 gravou', async () => {
-    const name = `toi-test-${(dbCount += 1)}`;
-    const v1 = new Dexie(name);
-    v1.version(1).stores({
-      conversations: 'id, updatedAt',
-      messages: 'id, conversationId, [conversationId+seq], status',
-      settings: 'key',
-      credentials: 'provider',
-    });
-    await v1.table('conversations').put({
-      id: 'c1',
-      title: 'Antiga',
-      model: 'claude-sonnet-5',
-      createdAt: 1,
-      updatedAt: 2,
-    });
-    const message = {
-      conversationId: 'c1',
-      parts: [{ type: 'text', text: 'oi' }],
-      status: 'complete',
-      createdAt: 1,
-      completedAt: 1,
-      usage: null,
-      stopReason: null,
-      error: null,
-      stream: null,
-    };
-    await v1.table('messages').bulkPut([
-      { ...message, id: 'm1', seq: 1, role: 'user', model: null },
-      { ...message, id: 'm2', seq: 2, role: 'assistant', model: 'claude-sonnet-5' },
-    ]);
-    await v1.table('settings').bulkPut([
-      { key: 'models', value: [{ id: 'claude-sonnet-5' }] },
-      { key: 'lastModel', value: 'claude-sonnet-5' },
-      { key: 'theme', value: 'dark' },
-    ]);
-    v1.close();
-
-    const db = new ToiDatabase(name);
-    try {
-      const store = new DexieConversationStore(db);
-      const settings = new DexieSettingsStore(db);
-
-      expect(await store.getConversation('c1')).toMatchObject({
-        provider: 'anthropic',
-        model: 'claude-sonnet-5',
-        title: 'Antiga',
-      });
-      expect(
-        (await store.listMessages('c1')).map((item) => [item.role, item.provider, item.model]),
-      ).toEqual([
-        ['user', null, null],
-        ['assistant', 'anthropic', 'claude-sonnet-5'],
-      ]);
-      expect(await settings.models('anthropic')).toBeNull();
-      expect(await db.settings.get('models')).toBeUndefined();
-      expect(await settings.lastModel()).toEqual({ provider: 'anthropic', id: 'claude-sonnet-5' });
-      expect(await db.settings.get('theme')).toEqual({ key: 'theme', value: 'dark' });
-    } finally {
-      await dropDb(db);
-    }
-  });
 });

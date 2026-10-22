@@ -7,9 +7,8 @@ import type { StopReason } from '../../domain/usage';
 
 /**
  * Forma gravada no IndexedDB. A estrutura é escrita à mão, não derivada do
- * domínio: mudar o domínio quebra o mapeamento aqui, e a mudança de schema
- * vira uma `version()` com `upgrade()` em `db.ts`, não uma surpresa nos dados
- * de quem já usa. `ProviderId`, como as outras enumerações, vem do domínio.
+ * domínio: mudar o domínio quebra o mapeamento aqui em vez de mudar o dado em
+ * silêncio. `ProviderId`, como as outras enumerações, vem do domínio.
  */
 export interface ConversationRecord {
   id: string;
@@ -172,15 +171,6 @@ export interface FamilyRefRecord {
   name: string;
 }
 
-const isObject = (value: unknown): value is Record<string, unknown> =>
-  typeof value === 'object' && value !== null;
-
-export const isModelRefRecord = (value: unknown): value is ModelRefRecord =>
-  isObject(value) && typeof value.provider === 'string' && typeof value.id === 'string';
-
-const isFamilyRefRecord = (value: unknown): value is FamilyRefRecord =>
-  isObject(value) && typeof value.provider === 'string' && typeof value.name === 'string';
-
 export const toModelRefRecord = (ref: ModelRef): ModelRefRecord => ({
   provider: ref.provider,
   id: ref.id,
@@ -205,14 +195,6 @@ export interface ModelPicksRecord {
   families: FamilyRefRecord[];
   models: ModelRefRecord[];
 }
-
-/** Valor ilegível volta ao padrão em vez de esvaziar o seletor. */
-export const isModelPicksRecord = (value: unknown): value is ModelPicksRecord =>
-  isObject(value) &&
-  Array.isArray(value.families) &&
-  value.families.every(isFamilyRefRecord) &&
-  Array.isArray(value.models) &&
-  value.models.every(isModelRefRecord);
 
 export const toModelPicksRecord = (picks: ModelPicks): ModelPicksRecord => ({
   families: picks.families.map(toFamilyRefRecord),

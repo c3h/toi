@@ -12,9 +12,6 @@ import type { ConversationStore } from '../ports/conversation-store';
  * o domínio quebre o mapeamento aqui em vez de mudar o arquivo em silêncio.
  * Enumerações (`StopReason`, `AppErrorCode`) vêm do domínio: acrescentar um
  * valor é compatível. Mudança incompatível sobe `version`.
- *
- * `provider` entrou depois da primeira versão, como campo novo: num arquivo
- * sem ele, a Conversa e as respostas são da Anthropic.
  */
 export const HISTORY_EXPORT_FORMAT = 'toi.history';
 export const HISTORY_EXPORT_VERSION = 1;

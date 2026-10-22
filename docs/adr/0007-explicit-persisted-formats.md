@@ -9,8 +9,7 @@ O IndexedDB gravava os tipos do domínio diretamente, e a exportação congelari
 
 ## Consequences
 
-- Mudar a forma gravada exige uma nova `version(n)` com `upgrade()` em `db.ts`; a versão anterior nunca é editada.
+- Em pré-produção, mudar a forma gravada edita a `version(1)` em `db.ts`, sem `upgrade()`. Isso superou, em 2026-10-21, a regra de uma nova `version(n)` por mudança: sem usuário, a migração só protegia o banco de desenvolvimento, e o Dexie 4 abre esse banco mesmo com a versão declarada menor que a instalada.
 - Mudança incompatível no arquivo sobe `version`; a importação, quando existir, lê as versões anteriores.
 - Enumerações (`StopReason`, `AppErrorCode`) continuam vindo do domínio: acrescentar um valor é compatível.
 - O contrato do store verifica uma Mensagem com todos os campos na ida e na volta, contra memória e Dexie.
-- A primeira migração é a `version(2)`, que grava o Provedor ([ADR 0008](0008-provider-and-protocol.md)).

@@ -6,12 +6,12 @@ import {
   fromModelPicksRecord,
   fromModelRecord,
   fromModelRefRecord,
-  isModelPicksRecord,
-  isModelRefRecord,
   toModelPicksRecord,
   toModelRecord,
   toModelRefRecord,
+  type ModelPicksRecord,
   type ModelRecord,
+  type ModelRefRecord,
 } from './records';
 
 const modelsKey = (provider: ProviderId): string => `models:${provider}`;
@@ -27,8 +27,7 @@ export class DexieSettingsStore implements SettingsStore {
 
   async models(provider: ProviderId): Promise<Model[] | null> {
     const row = await this.#db.settings.get(modelsKey(provider));
-    if (!Array.isArray(row?.value)) return null;
-    return (row.value as ModelRecord[]).map(fromModelRecord);
+    return row ? (row.value as ModelRecord[]).map(fromModelRecord) : null;
   }
 
   async saveModels(provider: ProviderId, models: Model[]): Promise<void> {
@@ -37,7 +36,7 @@ export class DexieSettingsStore implements SettingsStore {
 
   async lastModel(): Promise<ModelRef | null> {
     const row = await this.#db.settings.get(LAST_MODEL_KEY);
-    return isModelRefRecord(row?.value) ? fromModelRefRecord(row.value) : null;
+    return row ? fromModelRefRecord(row.value as ModelRefRecord) : null;
   }
 
   async saveLastModel(model: ModelRef): Promise<void> {
@@ -46,7 +45,7 @@ export class DexieSettingsStore implements SettingsStore {
 
   async modelPicks(): Promise<ModelPicks | null> {
     const row = await this.#db.settings.get(MODEL_PICKS_KEY);
-    return isModelPicksRecord(row?.value) ? fromModelPicksRecord(row.value) : null;
+    return row ? fromModelPicksRecord(row.value as ModelPicksRecord) : null;
   }
 
   async saveModelPicks(picks: ModelPicks): Promise<void> {
