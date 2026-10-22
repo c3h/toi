@@ -33,7 +33,7 @@ export const CodeBlock = ({ code, lang, closed }: CodeBlockProps) => {
         <span>{lang ?? 'texto'}</span>
         <CopyButton
           text={code}
-          className="code-copy inline-flex items-center gap-1 rounded-sm px-1 hover:text-text"
+          className="code-copy inline-flex items-center gap-1 px-1 hover:text-text"
         />
       </div>
       <pre>

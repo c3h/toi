@@ -62,7 +62,7 @@ const Item = ({ conversation, active, running, onSelect, onRename, onDelete }: I
                 setMode('view');
               }
             }}
-            className="w-full rounded-sm border border-accent bg-panel px-2 py-1.5 text-sm text-text outline-none"
+            className="w-full border border-accent bg-panel px-2 py-1.5 text-sm text-text outline-none"
           />
         </form>
       </li>
@@ -76,7 +76,7 @@ const Item = ({ conversation, active, running, onSelect, onRename, onDelete }: I
         aria-current={active ? 'page' : undefined}
         title={title}
         onClick={onSelect}
-        className={`flex w-full items-center gap-2 rounded-sm py-1.5 pr-8 pl-2 text-left text-sm transition-colors group-hover:bg-panel ${
+        className={`flex w-full items-center gap-2 py-1.5 pr-8 pl-2 text-left text-sm transition-colors group-hover:bg-panel ${
           active ? 'bg-panel text-accent' : 'text-muted group-hover:text-text'
         } ${menu.open ? 'bg-panel' : ''}`}
       >
@@ -97,7 +97,7 @@ const Item = ({ conversation, active, running, onSelect, onRename, onDelete }: I
         aria-expanded={menu.open}
         aria-controls={`menu-${conversation.id}`}
         onClick={menu.toggle}
-        className="absolute top-0.5 right-1 grid size-6 place-items-center rounded-sm text-subtle opacity-0 transition-[opacity,color] group-hover:opacity-100 hover:bg-line hover:text-text focus-visible:opacity-100 focus-visible:outline-offset-0 aria-expanded:bg-line aria-expanded:text-text aria-expanded:opacity-100 [@media(hover:none)]:opacity-100"
+        className="absolute top-0.5 right-1 grid size-6 place-items-center text-subtle opacity-0 transition-[opacity,color] group-hover:opacity-100 hover:bg-line hover:text-text focus-visible:opacity-100 focus-visible:outline-offset-0 aria-expanded:bg-line aria-expanded:text-text aria-expanded:opacity-100 [@media(hover:none)]:opacity-100"
       >
         <Ellipsis size={14} aria-hidden />
       </button>
@@ -143,7 +143,7 @@ const Item = ({ conversation, active, running, onSelect, onRename, onDelete }: I
           <span className="text-muted">apagar?</span>
           <button
             type="button"
-            className="rounded-sm text-danger hover:underline focus-visible:outline-offset-1"
+            className="text-danger hover:underline focus-visible:outline-offset-1"
             onClick={onDelete}
             autoFocus
           >
@@ -151,7 +151,7 @@ const Item = ({ conversation, active, running, onSelect, onRename, onDelete }: I
           </button>
           <button
             type="button"
-            className="rounded-sm text-subtle hover:text-text focus-visible:outline-offset-1"
+            className="text-subtle hover:text-text focus-visible:outline-offset-1"
             onClick={() => {
               setMode('view');
               menu.trigger.current?.focus();

@@ -321,7 +321,7 @@ export const Chat = ({
           <button
             type="button"
             aria-label="ir para o fim"
-            className="absolute -top-12 left-1/2 z-10 grid size-8 -translate-x-1/2 place-items-center rounded-full border border-line bg-panel text-muted shadow-md shadow-black/20 transition-colors hover:border-subtle hover:text-text"
+            className="absolute -top-12 left-1/2 z-10 grid size-8 -translate-x-1/2 place-items-center border border-line bg-panel text-muted transition-colors hover:border-subtle hover:text-text"
             onClick={() => {
               const element = scroller.current;
               if (!element) return;
@@ -362,7 +362,7 @@ export const Chat = ({
         )}
 
         <form
-          className="mx-auto max-w-[44rem] rounded-lg border border-line bg-panel transition-colors focus-within:border-subtle/60"
+          className="mx-auto max-w-[44rem] border border-line bg-panel transition-colors focus-within:border-subtle/60"
           onSubmit={(event) => {
             event.preventDefault();
             void submit();
@@ -407,7 +407,7 @@ export const Chat = ({
                   type="button"
                   aria-label="parar"
                   title="parar (esc)"
-                  className="grid size-7 flex-none place-items-center rounded-md border border-line text-text transition-colors hover:border-subtle"
+                  className="grid size-7 flex-none place-items-center border border-line text-text transition-colors hover:border-subtle"
                   onClick={onStop}
                 >
                   <Square size={10} fill="currentColor" aria-hidden />
@@ -419,7 +419,7 @@ export const Chat = ({
                 aria-label="enviar"
                 title="enviar (enter)"
                 disabled={!draft.trim()}
-                className="grid size-7 flex-none place-items-center rounded-md bg-accent text-bg transition-colors hover:bg-accent-2 disabled:bg-line disabled:text-subtle"
+                className="grid size-7 flex-none place-items-center bg-accent text-bg transition-colors hover:bg-accent-2 disabled:bg-line disabled:text-subtle"
               >
                 <ArrowUp size={15} strokeWidth={2.25} aria-hidden />
               </button>

@@ -35,7 +35,7 @@ export const ModelPicker = memo(
           aria-controls={id}
           disabled={disabled}
           onClick={toggle}
-          className="group inline-flex min-w-0 items-center gap-1.5 rounded-sm px-1.5 py-1 text-xs text-subtle transition-colors hover:bg-line/60 hover:text-text focus-visible:outline-offset-0 disabled:pointer-events-none disabled:opacity-60 aria-expanded:bg-line/60 aria-expanded:text-text"
+          className="group inline-flex min-w-0 items-center gap-1.5 px-1.5 py-1 text-xs text-subtle transition-colors hover:bg-line/60 hover:text-text focus-visible:outline-offset-0 disabled:pointer-events-none disabled:opacity-60 aria-expanded:bg-line/60 aria-expanded:text-text"
         >
           <span className="max-w-[14rem] truncate">{name}</span>
           <ChevronDown

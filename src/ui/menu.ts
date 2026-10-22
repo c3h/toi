@@ -1,10 +1,10 @@
 import { useRef, useState, type FocusEvent, type KeyboardEvent, type ToggleEvent } from 'react';
 
 export const MENU_ITEM =
-  'flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-left outline-none transition-colors';
+  'flex w-full items-center gap-2 px-2 py-1.5 text-left outline-none transition-colors';
 
 export const MENU_PANEL =
-  'm-0 rounded-md border border-line bg-panel p-1 text-sm text-muted shadow-lg shadow-black/30';
+  'm-0 border border-line bg-panel p-1 text-sm text-muted';
 
 const ITEMS = '[role^="menuitem"]';
 const GAP = 4;

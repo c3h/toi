@@ -84,7 +84,7 @@ export const Onboarding = ({ toi, provider, onConnected, onCancel }: OnboardingP
           autoFocus
           aria-invalid={error !== null}
           aria-describedby={error ? 'key-error' : 'key-hint'}
-          className="mt-5 w-full rounded-md border border-line bg-panel px-4 py-3 text-base text-text outline-none transition-colors placeholder:text-subtle focus:border-accent aria-invalid:border-danger"
+          className="mt-5 w-full border border-line bg-panel px-4 py-3 text-base text-text outline-none transition-colors placeholder:text-subtle focus:border-accent aria-invalid:border-danger"
         />
 
         {error ? (
@@ -111,7 +111,7 @@ export const Onboarding = ({ toi, provider, onConnected, onCancel }: OnboardingP
           <button
             type="submit"
             disabled={!key.trim() || checking}
-            className="rounded-md border border-accent px-4 py-2 text-accent transition-colors hover:bg-accent hover:text-bg disabled:border-line disabled:text-subtle disabled:hover:bg-transparent"
+            className="border border-accent px-4 py-2 text-accent transition-colors hover:bg-accent hover:text-bg disabled:border-line disabled:text-subtle disabled:hover:bg-transparent"
           >
             {checking ? 'validando…' : 'conectar'}
           </button>

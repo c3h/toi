@@ -163,8 +163,13 @@ body {
   color: var(--text);
   font-family: var(--font-serif);
   font-size: 1.0625rem;
-  line-height: 1.7;
+  line-height: 1.6;
   overflow-wrap: anywhere;
+}
+
+/* Medida de leitura; código e tabela seguem com a coluna inteira. */
+.prose-reply :where(p, ul, ol, blockquote, h1, h2, h3, h4, h5, h6) {
+  max-width: 68ch;
 }
 
 .prose-reply > :first-child,
@@ -213,8 +218,9 @@ body {
   text-decoration-color: var(--accent);
 }
 
+/* O número cresce para a esquerda; o recuo comporta dois dígitos dentro da coluna. */
 .prose-reply :where(ul, ol) {
-  padding-left: 1.25rem;
+  padding-left: 2em;
 }
 
 .prose-reply ul {
@@ -256,7 +262,6 @@ body {
 
 .prose-reply code:not(pre code) {
   border: 1px solid var(--line);
-  border-radius: 0.35rem;
   background: var(--panel);
   color: var(--accent-2);
   font-family: var(--font-mono);
@@ -295,7 +300,6 @@ body {
   position: relative;
   margin-block: 1.25rem;
   border: 1px solid var(--line);
-  border-radius: 0.375rem;
   background: var(--bg-soft);
 }
 
