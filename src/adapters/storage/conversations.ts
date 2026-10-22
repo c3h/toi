@@ -32,6 +32,21 @@ export class DexieConversationStore implements ConversationStore {
     await this.#db.conversations.put(toConversationRecord(conversation));
   }
 
+  updateConversation(
+    id: ConversationId,
+    change: (conversation: Conversation) => Conversation,
+  ): Promise<Conversation | null> {
+    // Transações `rw` no mesmo store são serializadas pelo IndexedDB, também entre abas.
+    return this.#db.transaction('rw', this.#db.conversations, async () => {
+      const record = await this.#db.conversations.get(id);
+      if (!record) return null;
+
+      const updated = change(fromConversationRecord(record));
+      await this.#db.conversations.put(toConversationRecord(updated));
+      return updated;
+    });
+  }
+
   async deleteConversation(id: ConversationId): Promise<void> {
     await this.#db.transaction('rw', this.#db.conversations, this.#db.messages, async () => {
       await this.#db.conversations.delete(id);

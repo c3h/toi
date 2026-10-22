@@ -53,6 +53,29 @@ export const describeConversationStore = (
       }
     });
 
+    it('updateConversation aplica a mudança sobre o que está gravado e não recria apagada', async () => {
+      const { store, cleanup } = await open();
+
+      try {
+        await store.putConversation(makeConversation('c1', { title: 'Antes', updatedAt: 1 }));
+        await store.putConversation(makeConversation('c1', { title: 'Outra aba', updatedAt: 1 }));
+
+        const updated = await store.updateConversation('c1', (current) => ({
+          ...current,
+          updatedAt: 9,
+        }));
+
+        expect(updated).toMatchObject({ title: 'Outra aba', updatedAt: 9 });
+        expect(await store.getConversation('c1')).toEqual(updated);
+
+        await store.deleteConversation('c1');
+        expect(await store.updateConversation('c1', (current) => current)).toBeNull();
+        expect(await store.getConversation('c1')).toBeNull();
+      } finally {
+        await cleanup();
+      }
+    });
+
     it('lista Conversas por updatedAt decrescente', async () => {
       const { store, cleanup } = await open();
 

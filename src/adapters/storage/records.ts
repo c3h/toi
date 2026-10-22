@@ -1,18 +1,20 @@
 import type { Conversation } from '../../domain/conversation';
 import type { AppErrorCode } from '../../domain/error';
+import type { ProviderId } from '../../domain/ids';
 import type { Message, MessageStatus, Part } from '../../domain/message';
-import type { Model } from '../../domain/model';
+import type { FamilyRef, Model, ModelPicks, ModelRef } from '../../domain/model';
 import type { StopReason } from '../../domain/usage';
 
 /**
  * Forma gravada no IndexedDB. A estrutura é escrita à mão, não derivada do
  * domínio: mudar o domínio quebra o mapeamento aqui, e a mudança de schema
  * vira uma `version()` com `upgrade()` em `db.ts`, não uma surpresa nos dados
- * de quem já usa. A forma da v1 é idêntica ao domínio da v1.
+ * de quem já usa. `ProviderId`, como as outras enumerações, vem do domínio.
  */
 export interface ConversationRecord {
   id: string;
   title: string;
+  provider: ProviderId;
   model: string;
   createdAt: number;
   updatedAt: number;
@@ -31,6 +33,7 @@ export interface MessageRecord {
   status: MessageStatus;
   createdAt: number;
   completedAt: number | null;
+  provider: ProviderId | null;
   model: string | null;
   usage: {
     inputTokens: number;
@@ -51,6 +54,7 @@ export interface MessageRecord {
 export const toConversationRecord = (conversation: Conversation): ConversationRecord => ({
   id: conversation.id,
   title: conversation.title,
+  provider: conversation.provider,
   model: conversation.model,
   createdAt: conversation.createdAt,
   updatedAt: conversation.updatedAt,
@@ -59,6 +63,7 @@ export const toConversationRecord = (conversation: Conversation): ConversationRe
 export const fromConversationRecord = (record: ConversationRecord): Conversation => ({
   id: record.id,
   title: record.title,
+  provider: record.provider,
   model: record.model,
   createdAt: record.createdAt,
   updatedAt: record.updatedAt,
@@ -91,6 +96,7 @@ export const toMessageRecord = (message: Message): MessageRecord => ({
   status: message.status,
   createdAt: message.createdAt,
   completedAt: message.completedAt,
+  provider: message.provider,
   model: message.model,
   usage: message.usage && {
     inputTokens: message.usage.inputTokens,
@@ -117,6 +123,7 @@ export const fromMessageRecord = (record: MessageRecord): Message => ({
   status: record.status,
   createdAt: record.createdAt,
   completedAt: record.completedAt,
+  provider: record.provider,
   model: record.model,
   usage: record.usage && { ...record.usage },
   stopReason: record.stopReason,
@@ -124,27 +131,95 @@ export const fromMessageRecord = (record: MessageRecord): Message => ({
   stream: record.stream && { ...record.stream },
 });
 
-/** Item do cache de Modelos em `settings`. */
+/** Item do cache de Modelos em `settings`, um cache por Provedor. */
 export interface ModelRecord {
+  provider: ProviderId;
   id: string;
   displayName: string;
+  family: string;
   maxTokens: number | null;
   maxInputTokens: number | null;
   createdAt: string;
 }
 
 export const toModelRecord = (model: Model): ModelRecord => ({
+  provider: model.provider,
   id: model.id,
   displayName: model.displayName,
+  family: model.family,
   maxTokens: model.maxTokens,
   maxInputTokens: model.maxInputTokens,
   createdAt: model.createdAt,
 });
 
 export const fromModelRecord = (record: ModelRecord): Model => ({
+  provider: record.provider,
   id: record.id,
   displayName: record.displayName,
+  family: record.family,
   maxTokens: record.maxTokens,
   maxInputTokens: record.maxInputTokens,
   createdAt: record.createdAt,
+});
+
+export interface ModelRefRecord {
+  provider: ProviderId;
+  id: string;
+}
+
+export interface FamilyRefRecord {
+  provider: ProviderId;
+  name: string;
+}
+
+const isObject = (value: unknown): value is Record<string, unknown> =>
+  typeof value === 'object' && value !== null;
+
+export const isModelRefRecord = (value: unknown): value is ModelRefRecord =>
+  isObject(value) && typeof value.provider === 'string' && typeof value.id === 'string';
+
+const isFamilyRefRecord = (value: unknown): value is FamilyRefRecord =>
+  isObject(value) && typeof value.provider === 'string' && typeof value.name === 'string';
+
+export const toModelRefRecord = (ref: ModelRef): ModelRefRecord => ({
+  provider: ref.provider,
+  id: ref.id,
+});
+
+export const fromModelRefRecord = (record: ModelRefRecord): ModelRef => ({
+  provider: record.provider,
+  id: record.id,
+});
+
+const toFamilyRefRecord = (ref: FamilyRef): FamilyRefRecord => ({
+  provider: ref.provider,
+  name: ref.name,
+});
+
+const fromFamilyRefRecord = (record: FamilyRefRecord): FamilyRef => ({
+  provider: record.provider,
+  name: record.name,
+});
+
+export interface ModelPicksRecord {
+  families: FamilyRefRecord[];
+  models: ModelRefRecord[];
+}
+
+/** Valor ilegível volta ao padrão em vez de esvaziar o seletor. */
+export const isModelPicksRecord = (value: unknown): value is ModelPicksRecord =>
+  isObject(value) &&
+  Array.isArray(value.families) &&
+  value.families.every(isFamilyRefRecord) &&
+  Array.isArray(value.models) &&
+  value.models.every(isModelRefRecord);
+
+export const toModelPicksRecord = (picks: ModelPicks): ModelPicksRecord => ({
+  families: picks.families.map(toFamilyRefRecord),
+  models: picks.models.map(toModelRefRecord),
+});
+
+export const fromModelPicksRecord = (record: ModelPicksRecord): ModelPicks => ({
+  families: record.families.map(fromFamilyRefRecord),
+  models: record.models.map(fromModelRefRecord),
 });

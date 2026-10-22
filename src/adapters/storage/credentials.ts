@@ -21,4 +21,8 @@ export class DexieCredentialStore implements CredentialStore {
   async delete(provider: ProviderId): Promise<void> {
     await this.#db.credentials.delete(provider);
   }
+
+  async clear(): Promise<void> {
+    await this.#db.credentials.clear();
+  }
 }
