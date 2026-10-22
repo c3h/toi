@@ -1,10 +1,11 @@
 import type { ProviderId } from '../domain/ids';
 import type { Effort, Model, ModelPicks, ModelRef } from '../domain/model';
+import type { ToolSpace } from '../domain/web';
 
 /**
  * Configurações não são segredo. Guarda o cache de Modelos de cada Provedor,
  * o último Modelo e o último Esforço escolhidos, que só definem o default de
- * uma Conversa nova, e quais Modelos o seletor oferece.
+ * uma Conversa nova, quais Modelos o seletor oferece e o espaço das Ferramentas.
  */
 export interface SettingsStore {
   models(provider: ProviderId): Promise<Model[] | null>;
@@ -17,5 +18,8 @@ export interface SettingsStore {
   /** `null` enquanto a pessoa não mexeu na lista. */
   modelPicks(): Promise<ModelPicks | null>;
   saveModelPicks(picks: ModelPicks): Promise<void>;
+  /** `null` enquanto a pessoa não escolheu um espaço. */
+  toolSpace(): Promise<ToolSpace | null>;
+  saveToolSpace(space: ToolSpace): Promise<void>;
   clear(): Promise<void>;
 }
