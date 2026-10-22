@@ -1,5 +1,8 @@
 import { connect, expect, send, setMock, test } from './fixtures';
 
+// Snapshots do trace executam trabalho na página e contaminam o orçamento de main thread.
+test.use({ trace: 'off' });
+
 const paragraph =
   'Um parágrafo de resposta com **ênfase**, `código` e uma [ligação](https://example.com) para ter Markdown de verdade.';
 
