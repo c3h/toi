@@ -31,6 +31,7 @@ export const testModel: Model = {
   maxTokens: 8192,
   maxInputTokens: 200_000,
   createdAt: '2026-01-01T00:00:00Z',
+  reasoningOff: true,
 };
 
 /** Um Modelo da Anthropic com a família que o Provedor daria ao id. */
@@ -127,6 +128,7 @@ export const makeConversation = (
 ): Conversation => ({
   id,
   title: 'Nova conversa',
+  titleSource: 'derived',
   provider: testModel.provider,
   model: testModel.id,
   effort: 'low',
@@ -346,6 +348,14 @@ export class MemorySettingsStore implements SettingsStore {
     this.values.set('toolSpace', space);
   }
 
+  async titleModel(): Promise<ModelRef | null> {
+    return (this.values.get('titleModel') as ModelRef | undefined) ?? null;
+  }
+
+  async saveTitleModel(model: ModelRef): Promise<void> {
+    this.values.set('titleModel', model);
+  }
+
   async clear(): Promise<void> {
     this.values.clear();
   }
@@ -415,6 +425,17 @@ export const deferred = (): { promise: Promise<void>; resolve: () => void } => {
   return { promise, resolve };
 };
 
+/** Pendura até o `signal` abortar e então rejeita como o `fetch`. */
+export const untilAborted = (signal: AbortSignal): Promise<never> =>
+  new Promise((_, reject) => {
+    if (signal.aborted) {
+      reject(abortError());
+      return;
+    }
+
+    signal.addEventListener('abort', () => reject(abortError()), { once: true });
+  });
+
 /** Emite um `delta`, sinaliza `delta` e espera o abort. */
 export const gatedProvider = () => {
   const { promise: delta, resolve: signalDelta } = deferred();
@@ -426,14 +447,7 @@ export const gatedProvider = () => {
     yield { type: 'delta', index: 0, part: 'text', text: 'a' };
     signalDelta();
 
-    await new Promise<never>((_, reject) => {
-      if (signal.aborted) {
-        reject(abortError());
-        return;
-      }
-
-      signal.addEventListener('abort', () => reject(abortError()), { once: true });
-    });
+    await untilAborted(signal);
   });
 
   return { provider, delta };
