@@ -18,6 +18,11 @@ export interface ContentBlockStartEvent {
   index: number;
   content_block: {
     type: string;
+    /** `redacted_thinking`. */
+    data?: string;
+    /** `tool_use`. */
+    id?: string;
+    name?: string;
   };
 }
 
@@ -27,6 +32,9 @@ export interface ContentBlockDeltaEvent {
   delta: {
     type: string;
     text?: string;
+    thinking?: string;
+    signature?: string;
+    partial_json?: string;
   };
 }
 

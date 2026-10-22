@@ -32,6 +32,7 @@ describe('AnthropicProvider', () => {
           model: 'claude-test',
           maxTokens: 128,
           effort: 'low',
+          tools: [],
           messages: [{ role: 'user', parts: [{ type: 'text', text: 'oi' }] }],
         },
         new AbortController().signal,
@@ -62,6 +63,7 @@ describe('AnthropicProvider', () => {
       model: 'claude-test',
       maxTokens: 128,
       effort: 'low',
+      tools: [],
       messages: [
         {
           role: 'user',
@@ -88,6 +90,48 @@ describe('AnthropicProvider', () => {
         source: { type: 'text', media_type: 'text/plain', data: '# oi' },
       },
       { type: 'text', text: 'resuma' },
+    ]);
+  });
+
+  it('manda as Ferramentas e as Rodadas com raciocínio, chamada e resultado', async () => {
+    const payload = await toAnthropicPayload({
+      model: 'claude-test',
+      maxTokens: 128,
+      effort: 'low',
+      tools: [{ name: 'web_search', description: 'Busca.', inputSchema: { type: 'object' } }],
+      messages: [
+        { role: 'user', parts: [{ type: 'text', text: 'cobre hoje?' }] },
+        {
+          role: 'assistant',
+          parts: [
+            { type: 'reasoning', text: 'buscar', signature: 'sig' },
+            { type: 'redacted_reasoning', data: 'cifrado' },
+            { type: 'tool_call', callId: 't1', tool: 'web_search', input: { query: 'cobre' } },
+          ],
+        },
+        {
+          role: 'user',
+          parts: [{ type: 'tool_result', callId: 't1', content: 'Error: x', isError: true }],
+        },
+      ],
+    });
+
+    expect(payload.tools).toEqual([
+      { name: 'web_search', description: 'Busca.', input_schema: { type: 'object' } },
+    ]);
+    expect(payload.messages.slice(1)).toEqual([
+      {
+        role: 'assistant',
+        content: [
+          { type: 'thinking', thinking: 'buscar', signature: 'sig' },
+          { type: 'redacted_thinking', data: 'cifrado' },
+          { type: 'tool_use', id: 't1', name: 'web_search', input: { query: 'cobre' } },
+        ],
+      },
+      {
+        role: 'user',
+        content: [{ type: 'tool_result', tool_use_id: 't1', content: 'Error: x', is_error: true }],
+      },
     ]);
   });
 });
