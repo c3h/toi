@@ -1,19 +1,13 @@
 import { CircleAlert, Download, FileText, LoaderCircle, X } from 'lucide-react';
 import { useEffect, useRef, useState, type ReactNode, type RefObject } from 'react';
 import type { Toi } from '../../app/toi';
-import {
-  MESSAGE_LIMITS,
-  TEXT_LIMIT_BYTES,
-  type Attachment,
-  type MessageLimit,
-} from '../../domain/attachment';
+import { MESSAGE_LIMITS, TEXT_LIMIT_BYTES, type Attachment } from '../../domain/attachment';
 import type { AttachmentId } from '../../domain/ids';
 import { download, formatBytes } from '../support';
-import type { PrepareProblem } from './prepare';
-import type { DraftAttachment } from './use-draft-attachments';
+import type { DraftAttachment, DraftProblem } from './use-draft-attachments';
 import { useObjectUrl } from './use-object-url';
 
-const PROBLEM_TEXT: Record<PrepareProblem | MessageLimit, string> = {
+const PROBLEM_TEXT: Record<DraftProblem, string> = {
   empty: 'arquivo vazio',
   unreadable: 'não deu para ler o arquivo',
   unsupported: 'só imagem, pdf ou texto em utf-8',
@@ -26,6 +20,7 @@ const PROBLEM_TEXT: Record<PrepareProblem | MessageLimit, string> = {
   files: `passa de ${MESSAGE_LIMITS.files} arquivos por mensagem`,
   bytes: `passa de ${formatBytes(MESSAGE_LIMITS.bytes)} por mensagem`,
   pages: `passa de ${MESSAGE_LIMITS.pages} páginas por mensagem`,
+  not_loaded: 'recarregue a página para anexar',
 };
 
 const detailOf = (attachment: Attachment): string => {
