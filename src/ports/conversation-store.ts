@@ -4,7 +4,9 @@ import type { Message } from '../domain/message';
 
 /**
  * Histórico Local. `listConversations` ordena por `updatedAt` decrescente;
- * `listMessages` ordena por `seq`; os `put*` são upsert. `deleteConversation`
+ * `listMessages` ordena por `seq`; os `put*` são upsert. `updateConversation`
+ * lê e grava numa só transação, para uma aba não desfazer o que outra mudou
+ * entre a leitura e a escrita; não recria uma Conversa apagada. `deleteConversation`
  * remove as Mensagens junto. A porta não alcança `credentials`: "apagar tudo"
  * é composição no app.
  *
@@ -16,6 +18,11 @@ export interface ConversationStore {
   listConversations(): Promise<Conversation[]>;
   getConversation(id: ConversationId): Promise<Conversation | null>;
   putConversation(conversation: Conversation): Promise<void>;
+  /** `null` se a Conversa não existe. */
+  updateConversation(
+    id: ConversationId,
+    change: (conversation: Conversation) => Conversation,
+  ): Promise<Conversation | null>;
   deleteConversation(id: ConversationId): Promise<void>;
   listMessages(conversationId: ConversationId): Promise<Message[]>;
   getMessage(id: MessageId): Promise<Message | null>;

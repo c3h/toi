@@ -1,3 +1,4 @@
+import type { ProviderId } from '../domain/ids';
 import type { Part } from '../domain/message';
 import type { Model } from '../domain/model';
 import type { StreamEvent } from '../domain/stream';
@@ -14,7 +15,6 @@ export interface ChatRequest {
   messages: ChatMessage[];
   /** Instrução de sistema; campo próprio, nunca uma Mensagem. */
   system?: string;
-  temperature?: number;
 }
 
 /**
@@ -25,4 +25,29 @@ export interface ChatRequest {
 export interface ChatProvider {
   listModels(signal: AbortSignal): Promise<Model[]>;
   stream(request: ChatRequest, signal: AbortSignal): AsyncIterable<StreamEvent>;
+}
+
+/**
+ * O que a UI pode saber de um Provedor: nome e onde conseguir a Chave.
+ * Nunca endpoint, header ou Protocolo. As formas com artigo existem porque
+ * a copy em português contrai a preposição: "da Anthropic", "do Google".
+ */
+export interface ProviderInfo {
+  id: ProviderId;
+  /** "a Anthropic", "o Google". */
+  the: string;
+  /** "da Anthropic", "do Google". */
+  of: string;
+  /** "à Anthropic", "ao Google". */
+  to: string;
+  keyPlaceholder: string;
+  keysUrl: string;
+  /** Famílias que o seletor oferece até a pessoa mexer na lista. */
+  defaultFamilies: string[];
+}
+
+/** Um Provedor registrado no composition root: o descritor e como conectar com uma Chave. */
+export interface ProviderAdapter {
+  info: ProviderInfo;
+  create(apiKey: string): ChatProvider;
 }
