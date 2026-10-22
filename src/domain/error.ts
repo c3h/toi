@@ -5,6 +5,7 @@ export type AppErrorCode =
   | 'model_unavailable'
   | 'context_overflow'
   | 'request_too_large'
+  | 'attachment_rejected'
   | 'invalid_request'
   | 'rate_limited'
   | 'overloaded'
@@ -14,6 +15,7 @@ export type AppErrorCode =
   | 'not_connected'
   | 'flow_busy'
   | 'storage_failed'
+  | 'storage_full'
   | 'unknown';
 
 export interface AppErrorOptions {
@@ -29,6 +31,7 @@ const MESSAGES: Record<AppErrorCode, string> = {
   model_unavailable: 'Modelo indisponível.',
   context_overflow: 'A conversa passou do limite do Modelo.',
   request_too_large: 'O pedido é grande demais.',
+  attachment_rejected: 'O Modelo recusou um dos anexos.',
   invalid_request: 'O pedido foi recusado.',
   rate_limited: 'Limite de requisições atingido.',
   overloaded: 'O Modelo está sobrecarregado.',
@@ -38,6 +41,7 @@ const MESSAGES: Record<AppErrorCode, string> = {
   not_connected: 'Conecte uma Chave para conversar.',
   flow_busy: 'Espere a operação atual terminar, nesta ou em outra aba.',
   storage_failed: 'Não foi possível salvar tudo no navegador.',
+  storage_full: 'O navegador ficou sem espaço para salvar esta Mensagem.',
   unknown: 'Algo deu errado.',
 };
 
@@ -66,6 +70,10 @@ export const asAppError = (error: unknown): AppError =>
 /** O Fluxo fechou sem `finished`: a conexão caiu no meio da resposta. */
 export const truncatedError = (): AppError =>
   new AppError('unreachable', 'A resposta terminou antes do fim.');
+
+/** Os bytes de um Anexo sumiram do navegador; a requisição não sai sem eles. */
+export const missingAttachmentError = (): AppError =>
+  new AppError('storage_failed', 'Um anexo desta conversa não está mais no navegador.');
 
 export interface AppErrorInfo {
   code: AppErrorCode;

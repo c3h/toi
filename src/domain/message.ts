@@ -1,11 +1,17 @@
+import type { Attachment } from './attachment';
 import type { AppErrorInfo } from './error';
 import type { ConversationId, MessageId, ProviderId } from './ids';
 import type { Effort } from './model';
 import type { StopReason, Usage } from './usage';
 
-export type Part = { type: 'text'; text: string } | { type: 'reasoning'; text: string; signature: string };
+export type Part =
+  | { type: 'text'; text: string }
+  | { type: 'reasoning'; text: string; signature: string }
+  /** Só na Mensagem do user, antes do texto; os bytes ficam fora da Mensagem. */
+  | { type: 'file'; attachment: Attachment };
 
-export type PartKind = Part['type'];
+/** O que um `delta` do Fluxo pode trazer. */
+export type PartKind = 'text' | 'reasoning';
 
 export type MessageStatus = 'complete' | 'streaming' | 'interrupted' | 'failed';
 
@@ -73,11 +79,15 @@ export const timingOf = (message: Message): Timing | null => {
   };
 };
 
-export const textOf =(message: Message): string =>
+export const textOf = (message: Message): string =>
   message.parts
     .filter((part): part is Extract<Part, { type: 'text' }> => part.type === 'text')
     .map((part) => part.text)
     .join('');
+
+/** Aceita também a Mensagem já escolhida para a requisição, que só tem Partes `text` e `file`. */
+export const attachmentsOf = (message: Pick<Message, 'parts'>): Attachment[] =>
+  message.parts.flatMap((part) => (part.type === 'file' ? [part.attachment] : []));
 
 export const appendText = (message: Message, text: string): Message => {
   const parts = [...message.parts];
