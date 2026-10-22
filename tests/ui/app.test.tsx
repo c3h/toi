@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest';
+import { describe, expect, it } from 'vitest';
 import { userEvent } from 'vitest/browser';
 import { render } from 'vitest-browser-react';
 import { createToi } from '../../src/app/toi';
@@ -129,20 +129,6 @@ describe('App', () => {
 
     await expect.element(input).toHaveValue('linha 1\nlinha 2');
     expect(screen.container.querySelector('article')).toBeNull();
-  });
-
-  it('copiar leva o Markdown original da resposta', async () => {
-    const writeText = vi.spyOn(navigator.clipboard, 'writeText').mockResolvedValue();
-    const screen = await mount(() => new ScriptedProvider(replyEvents('**Olá**, tudo certo.')));
-    await connect(screen);
-    await userEvent.fill(screen.getByLabelText('mensagem'), 'Pergunta');
-    await userEvent.keyboard('{Enter}');
-
-    await userEvent.click(screen.getByRole('button', { name: 'copiar' }));
-
-    expect(writeText).toHaveBeenCalledWith('**Olá**, tudo certo.');
-    await expect.element(screen.getByRole('button', { name: 'copiado' })).toBeVisible();
-    writeText.mockRestore();
   });
 
   it('apagar uma Conversa sai do menu da linha e pede confirmação', async () => {

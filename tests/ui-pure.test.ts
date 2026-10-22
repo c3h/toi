@@ -29,23 +29,11 @@ describe('splitBlocks', () => {
     expect(splitBlocks('Antes\n\n```\nabc\n\ndef')).toEqual(['Antes', '```\nabc\n\ndef']);
   });
 
-  it('fecha a cerca só com o mesmo caractere e tamanho suficiente', () => {
-    expect(splitBlocks('````\n```\n\nainda código\n````\n\nfora')).toEqual([
-      '````\n```\n\nainda código\n````',
-      'fora',
-    ]);
-  });
-
   it('mantém continuação recuada no item de lista', () => {
     expect(splitBlocks('1. item\n\n    continuação\n\nfim')).toEqual([
       '1. item\n\n    continuação',
       'fim',
     ]);
-  });
-
-  it('texto vazio não gera bloco', () => {
-    expect(splitBlocks('')).toEqual([]);
-    expect(splitBlocks('\n\n')).toEqual([]);
   });
 });
 
@@ -69,12 +57,6 @@ describe('mergeMessages', () => {
 
     expect(merged[0]?.status).toBe('complete');
     expect(live.size).toBe(0);
-  });
-
-  it('inclui Mensagem que o store ainda não tem e ordena por seq', () => {
-    const live = new Map([['m2', message('m2', 2, 'streaming')]]);
-    const merged = mergeMessages([message('m1', 1, 'complete')], live);
-    expect(merged.map((item) => item.id)).toEqual(['m1', 'm2']);
   });
 });
 

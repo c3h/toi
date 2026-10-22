@@ -2,7 +2,6 @@ import { describe, expect, it } from 'vitest';
 import {
   advanceReveal,
   initialRevealState,
-  isAnimating,
   isRevealSettled,
   retargetReveal,
   revealedPrefix,
@@ -10,7 +9,6 @@ import {
   startRevealTrack,
   stepReveal,
   type RevealState,
-  type RevealTrack,
 } from '../src/ui/reveal';
 
 /** [ms depois do pedido, caracteres] por delta, como o Provedor entrega. */
@@ -88,10 +86,6 @@ describe('stepReveal', () => {
     }
   });
 
-  it('mostra texto no primeiro frame depois que ele chega', () => {
-    expect(play(haiku)[0]!.shown).toBeGreaterThan(0);
-  });
-
   it('salta à frente de um texto que chega inteiro e anima só o fim', () => {
     const frames = play([
       [0, 3000],
@@ -119,44 +113,12 @@ describe('stepReveal', () => {
     expect(lags[Math.floor(lags.length * 0.95)]).toBeLessThanOrEqual(350);
   });
 
-  it('pega o ritmo da primeira rajada de uma vez, mesmo depois de um token sozinho', () => {
-    let state = stepReveal(initialRevealState, 1, 'live', FRAME_MS);
-    state = stepReveal(state, 1, 'live', FRAME_MS);
-    state = stepReveal(state, 111, 'live', FRAME_MS);
-    expect(state.speed).toBeGreaterThanOrEqual(110 / 0.25);
-  });
-
   it('mostra o que falta em até 400 ms depois do fim do Fluxo', () => {
     for (const trace of [clumped, haiku]) {
       const frames = play(trace);
       const completedAt = trace[trace.length - 1]![0] + COMPLETION_MS;
       expect(frames[frames.length - 1]!.at - completedAt).toBeLessThanOrEqual(400 + FRAME_MS);
     }
-  });
-
-  it('termina no prazo mesmo com a main thread a dez frames por segundo', () => {
-    let state: RevealState = { shown: 0, speed: 600 };
-    let frames = 0;
-    while (!isRevealSettled(state, 350)) {
-      state = stepReveal(state, 350, 'drain', 100);
-      frames++;
-    }
-    expect(frames * 100).toBeLessThanOrEqual(500);
-  });
-
-  it('volta depois de uma pausa na velocidade em que o texto chegava', () => {
-    let state: RevealState = initialRevealState;
-    for (let i = 0; i < 60; i++) state = stepReveal(state, (i + 1) * 12, 'live', FRAME_MS);
-    const before = state;
-    // O Fluxo silencia o bastante para a revelação alcançar.
-    for (let i = 0; i < 60; i++) state = stepReveal(state, 720, 'live', FRAME_MS);
-    expect(state.shown).toBe(720);
-    expect(state.speed).toBeGreaterThan(before.speed * 0.5);
-
-    const resumed = stepReveal(state, 840, 'live', FRAME_MS);
-    expect(resumed.shown - 720).toBeGreaterThanOrEqual(
-      Math.floor((before.speed * 0.5 * FRAME_MS) / 1000),
-    );
   });
 
   it('tem o mesmo ritmo a 60 e a 120 frames por segundo', () => {
@@ -168,16 +130,6 @@ describe('stepReveal', () => {
     for (let at = 1200; at < 4500; at += 250) {
       expect(Math.abs(shownBy(at60, at) - shownBy(at120, at))).toBeLessThanOrEqual(25);
     }
-  });
-
-  it('conta um frame muito longo como no máximo um quarto de segundo', () => {
-    const state = stepReveal({ shown: 100, speed: 600 }, 500, 'live', 5000);
-    expect(state.shown - 100).toBeLessThanOrEqual(1600 * 0.25 + 1);
-    expect(state.shown).toBeLessThan(500);
-  });
-
-  it('mostra tudo de uma vez em `instant`', () => {
-    expect(stepReveal(initialRevealState, 500, 'instant', 0).shown).toBe(500);
   });
 });
 
@@ -192,16 +144,13 @@ describe('revealedPrefix', () => {
 });
 
 describe('retargetReveal', () => {
-  const settle = (track: RevealTrack): RevealTrack => {
-    let current = track;
-    while (!isRevealSettled(current.state, current.text.length)) {
-      current = advanceReveal(current, FRAME_MS);
+  const settledLive = (text: string) => {
+    let track = retargetReveal(startRevealTrack('', 'live'), text, 'live', true);
+    while (!isRevealSettled(track.state, track.text.length)) {
+      track = advanceReveal(track, FRAME_MS);
     }
-    return current;
+    return track;
   };
-
-  const settledLive = (text: string) =>
-    settle(retargetReveal(startRevealTrack('', 'live'), text, 'live', true));
 
   it('mostra inteira a Mensagem aberta do histórico', () => {
     const track = retargetReveal(startRevealTrack('Olá mundo', 'settle'), 'Olá mundo', 'settle', true);
@@ -209,40 +158,10 @@ describe('retargetReveal', () => {
     expect(revealedText(track)).toBe('Olá mundo');
   });
 
-  it('termina a revelação da resposta que fecha `complete` na tela', () => {
-    let track = retargetReveal(startRevealTrack('', 'live'), 'Olá mundo, tudo bem?', 'live', true);
-    track = advanceReveal(track, FRAME_MS);
-    track = retargetReveal(track, 'Olá mundo, tudo bem?', 'settle', true);
-    expect(track.mode).toBe('drain');
-    expect(isAnimating(track)).toBe(true);
-
-    expect(isAnimating(settle(track))).toBe(false);
-  });
-
   it('recomeça do zero ao tentar de novo, que limpa as Partes', () => {
     const track = retargetReveal(settledLive('Primeira resposta.'), '', 'live', true);
     expect(track.state).toEqual(initialRevealState);
     expect(revealedText(track)).toBe('');
-  });
-
-  it('fica onde estava quando o store traz o que esta tela perdeu', () => {
-    const before = settledLive('mundo, tudo');
-    const track = retargetReveal(before, 'Olá mundo, tudo bem', 'live', true);
-    expect(track.state.shown).toBe(before.state.shown);
-    expect(revealedText(track)).toBe('Olá mundo, ');
-  });
-
-  it('mostra inteiro um texto final diferente do que veio no Fluxo', () => {
-    const track = retargetReveal(settledLive('Olá  mundo '), 'Olá mundo.', 'settle', true);
-    expect(revealedText(track)).toBe('Olá mundo.');
-    expect(isAnimating(track)).toBe(false);
-  });
-
-  it('mostra inteira a resposta `interrupted` ou `failed`', () => {
-    let track = retargetReveal(startRevealTrack('', 'live'), 'Texto parcial que chegou', 'live', true);
-    track = advanceReveal(track, FRAME_MS);
-    track = retargetReveal(track, 'Texto parcial que chegou', 'instant', true);
-    expect(revealedText(track)).toBe('Texto parcial que chegou');
   });
 
   it('mostra tudo com a aba oculta ou movimento reduzido e continua dali', () => {

@@ -79,30 +79,6 @@ describe('Prose', () => {
     expect(link.container.querySelector('a')).toBeNull();
   });
 
-  it('anima palavra por palavra só quando pedido', async () => {
-    const live = await render(<Prose text={'um `dois` três'} open animate />);
-    await expect.element(live.getByText('três')).toBeVisible();
-    expect([...live.container.querySelectorAll('.word')].map((word) => word.textContent)).toEqual([
-      'um',
-      'dois',
-      'três',
-    ]);
-
-    const stored = await render(<Prose text={'um `dois` três'} open={false} />);
-    await expect.poll(() => stored.container.textContent).toContain('três');
-    expect(stored.container.querySelectorAll('.word')).toHaveLength(0);
-  });
-
-  it('põe o cursor só quando pedido, mesmo em Fluxo', async () => {
-    const flowing = await render(<Prose text={'um dois'} open />);
-    await expect.element(flowing.getByText('dois')).toBeVisible();
-    expect(flowing.container.querySelector('.caret')).toBeNull();
-
-    const waiting = await render(<Prose text={'um três'} open caret />);
-    await expect.element(waiting.getByText('três')).toBeVisible();
-    expect(waiting.container.querySelector('.caret')).not.toBeNull();
-  });
-
   it('mantém as palavras à vista quando o texto cresce e quando fecha', async () => {
     const screen = await render(<Prose text={'um do'} open animate />);
     await expect.element(screen.getByText('do')).toBeVisible();

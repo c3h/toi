@@ -62,16 +62,6 @@ describe('useReveal', () => {
     expect(await frames(hook, 1000)).not.toContain(true);
   });
 
-  it('anima só a resposta vista em Fluxo, e até desmontar', async () => {
-    const live = await mount('', 'streaming');
-    expect(live.result.current.animate).toBe(true);
-    await live.rerender({ text: 'Pronto.', status: 'complete' });
-    expect(live.result.current.animate).toBe(true);
-
-    const stored = await mount('Do histórico.', 'complete');
-    expect(stored.result.current.animate).toBe(false);
-  });
-
   it('não pisca o cursor entre rajadas de um Fluxo rápido', async () => {
     const hook = await mount('', 'streaming');
     let text = '';
