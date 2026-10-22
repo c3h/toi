@@ -1,5 +1,5 @@
 import type { ProviderId } from '../../domain/ids';
-import type { Model, ModelPicks, ModelRef } from '../../domain/model';
+import type { Effort, Model, ModelPicks, ModelRef } from '../../domain/model';
 import type { SettingsStore } from '../../ports/settings-store';
 import type { ToiDatabase } from './db';
 import {
@@ -16,6 +16,7 @@ import {
 
 const modelsKey = (provider: ProviderId): string => `models:${provider}`;
 const LAST_MODEL_KEY = 'lastModel';
+const LAST_EFFORT_KEY = 'lastEffort';
 const MODEL_PICKS_KEY = 'modelPicks';
 
 export class DexieSettingsStore implements SettingsStore {
@@ -41,6 +42,15 @@ export class DexieSettingsStore implements SettingsStore {
 
   async saveLastModel(model: ModelRef): Promise<void> {
     await this.#db.settings.put({ key: LAST_MODEL_KEY, value: toModelRefRecord(model) });
+  }
+
+  async lastEffort(): Promise<Effort | null> {
+    const row = await this.#db.settings.get(LAST_EFFORT_KEY);
+    return row ? (row.value as Effort) : null;
+  }
+
+  async saveLastEffort(effort: Effort): Promise<void> {
+    await this.#db.settings.put({ key: LAST_EFFORT_KEY, value: effort });
   }
 
   async modelPicks(): Promise<ModelPicks | null> {

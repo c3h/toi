@@ -1,14 +1,22 @@
-import type { Model } from '../../../domain/model';
+import { EFFORTS, type Effort, type Model } from '../../../domain/model';
 import type { Clock } from '../../../ports/clock';
 import type { FetchLike } from '../../http/fetch';
 import { anthropicFetch, API_URL } from './fetch';
 import { anthropicErrors, anthropicInfo } from './info';
+
+interface Supported {
+  supported: boolean;
+}
+
+/** A API devolve a árvore inteira de capacidades, com `supported` em cada folha. */
+type AnthropicEffortCapability = Supported & Record<Effort, Supported>;
 
 interface AnthropicModel {
   id: string;
   display_name?: string;
   max_tokens?: number | null;
   max_input_tokens?: number | null;
+  capabilities: { effort: AnthropicEffortCapability };
   created_at?: string;
   lifecycle?: 'active' | 'deprecated' | 'retired';
 }
@@ -25,6 +33,10 @@ const MAX_PAGES = 20;
 /** O primeiro trecho só de letras do id depois de `claude`: `claude-3-5-sonnet-…` e `claude-sonnet-4-5` são `sonnet`. */
 export const anthropicFamily = (id: string): string =>
   id.split('-').find((part) => part !== 'claude' && /^[a-z]+$/.test(part)) ?? id;
+
+/** O Toi só oferece Modelos que aceitam a escala inteira de Esforço. */
+const acceptsEveryEffort = (capability: AnthropicEffortCapability): boolean =>
+  capability.supported && EFFORTS.every((level) => capability[level].supported);
 
 export async function fetchModels(
   apiKey: string,
@@ -51,6 +63,7 @@ export async function fetchModels(
 
     for (const model of body.data ?? []) {
       if (model.lifecycle && model.lifecycle !== 'active') continue;
+      if (!acceptsEveryEffort(model.capabilities.effort)) continue;
 
       models.push({
         provider: anthropicInfo.id,

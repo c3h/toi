@@ -2,19 +2,20 @@ import type { Conversation } from '../../domain/conversation';
 import type { AppErrorCode } from '../../domain/error';
 import type { ProviderId } from '../../domain/ids';
 import type { Message, MessageStatus, Part } from '../../domain/message';
-import type { FamilyRef, Model, ModelPicks, ModelRef } from '../../domain/model';
+import type { Effort, FamilyRef, Model, ModelPicks, ModelRef } from '../../domain/model';
 import type { StopReason } from '../../domain/usage';
 
 /**
  * Forma gravada no IndexedDB. A estrutura é escrita à mão, não derivada do
  * domínio: mudar o domínio quebra o mapeamento aqui em vez de mudar o dado em
- * silêncio. `ProviderId`, como as outras enumerações, vem do domínio.
+ * silêncio. `ProviderId` e `Effort`, como as outras enumerações, vêm do domínio.
  */
 export interface ConversationRecord {
   id: string;
   title: string;
   provider: ProviderId;
   model: string;
+  effort: Effort;
   createdAt: number;
   updatedAt: number;
 }
@@ -35,6 +36,7 @@ export interface MessageRecord {
   firstTokenAt: number | null;
   provider: ProviderId | null;
   model: string | null;
+  effort: Effort | null;
   usage: {
     inputTokens: number;
     outputTokens: number;
@@ -55,6 +57,7 @@ export const toConversationRecord = (conversation: Conversation): ConversationRe
   title: conversation.title,
   provider: conversation.provider,
   model: conversation.model,
+  effort: conversation.effort,
   createdAt: conversation.createdAt,
   updatedAt: conversation.updatedAt,
 });
@@ -64,6 +67,7 @@ export const fromConversationRecord = (record: ConversationRecord): Conversation
   title: record.title,
   provider: record.provider,
   model: record.model,
+  effort: record.effort,
   createdAt: record.createdAt,
   updatedAt: record.updatedAt,
 });
@@ -98,6 +102,7 @@ export const toMessageRecord = (message: Message): MessageRecord => ({
   firstTokenAt: message.firstTokenAt,
   provider: message.provider,
   model: message.model,
+  effort: message.effort,
   usage: message.usage && {
     inputTokens: message.usage.inputTokens,
     outputTokens: message.usage.outputTokens,
@@ -125,6 +130,7 @@ export const fromMessageRecord = (record: MessageRecord): Message => ({
   firstTokenAt: record.firstTokenAt,
   provider: record.provider,
   model: record.model,
+  effort: record.effort,
   usage: record.usage && { ...record.usage },
   stopReason: record.stopReason,
   error: record.error && { ...record.error },

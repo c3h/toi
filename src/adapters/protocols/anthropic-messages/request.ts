@@ -1,4 +1,5 @@
 import type { Part } from '../../../domain/message';
+import type { Effort } from '../../../domain/model';
 import type { ChatRequest } from '../../../ports/chat-provider';
 
 export type AnthropicContentBlock =
@@ -10,6 +11,7 @@ export interface AnthropicPayload {
   max_tokens: number;
   stream: true;
   system?: string;
+  output_config: { effort: Effort };
   messages: Array<{ role: 'user' | 'assistant'; content: AnthropicContentBlock[] }>;
 }
 
@@ -27,6 +29,7 @@ export const toAnthropicPayload = (request: ChatRequest): AnthropicPayload => ({
   max_tokens: request.maxTokens,
   stream: true,
   ...(request.system === undefined ? {} : { system: request.system }),
+  output_config: { effort: request.effort },
   messages: request.messages.map((message) => ({
     role: message.role,
     content: message.parts.map(toContentBlock),
