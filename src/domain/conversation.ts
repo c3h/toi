@@ -1,11 +1,13 @@
 import type { ConversationId, ProviderId } from './ids';
+import type { Effort } from './model';
 
-/** `provider` e `model` são o destino do próximo envio, não de toda a Conversa. */
+/** `provider`, `model` e `effort` são o destino do próximo envio, não de toda a Conversa. */
 export interface Conversation {
   id: ConversationId;
   title: string;
   provider: ProviderId;
   model: string;
+  effort: Effort;
   createdAt: number;
   updatedAt: number;
 }

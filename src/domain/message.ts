@@ -1,5 +1,6 @@
 import type { AppErrorInfo } from './error';
 import type { ConversationId, MessageId, ProviderId } from './ids';
+import type { Effort } from './model';
 import type { StopReason, Usage } from './usage';
 
 export type Part = { type: 'text'; text: string } | { type: 'reasoning'; text: string; signature: string };
@@ -26,6 +27,8 @@ export interface Message {
   /** Quem gerou a resposta; `null` na Mensagem do user, como `model`. */
   provider: ProviderId | null;
   model: string | null;
+  /** O Esforço pedido; `null` na Mensagem do user, como `model`. */
+  effort: Effort | null;
   usage: Usage | null;
   stopReason: StopReason | null;
   error: AppErrorInfo | null;

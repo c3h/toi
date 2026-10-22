@@ -1,5 +1,13 @@
 import type { ProviderId } from './ids';
 
+/** Níveis de Esforço, do menor ao maior. Todo Modelo oferecido aceita todos. */
+export const EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max'] as const;
+
+export type Effort = (typeof EFFORTS)[number];
+
+/** O Esforço da primeira Conversa: o menor. Depois, vale o do último envio. */
+export const DEFAULT_EFFORT: Effort = EFFORTS[0];
+
 export interface Model {
   provider: ProviderId;
   id: string;
