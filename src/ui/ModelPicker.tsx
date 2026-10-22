@@ -1,7 +1,8 @@
-import { Check, ChevronDown, SlidersHorizontal } from 'lucide-react';
+import { ChevronDown, SlidersHorizontal } from 'lucide-react';
 import { memo, useId } from 'react';
 import { findModel, isModel, type Model } from '../domain/model';
-import { MENU_ITEM, MENU_PANEL, useMenu } from './menu';
+import { MENU_ITEM, MENU_PANEL, PICKER_TRIGGER, useMenu } from './menu';
+import { PickerItem } from './PickerItem';
 
 interface ModelPickerProps {
   /** Os Modelos marcados em Configurações. */
@@ -35,7 +36,7 @@ export const ModelPicker = memo(
           aria-controls={id}
           disabled={disabled}
           onClick={toggle}
-          className="group inline-flex min-w-0 items-center gap-1.5 px-1.5 py-1 text-xs text-subtle transition-colors hover:bg-line/60 hover:text-text focus-visible:outline-offset-0 disabled:pointer-events-none disabled:opacity-60 aria-expanded:bg-line/60 aria-expanded:text-text"
+          className={PICKER_TRIGGER}
         >
           <span className="max-w-[14rem] truncate">{name}</span>
           <ChevronDown
@@ -46,27 +47,15 @@ export const ModelPicker = memo(
         </button>
 
         <div {...panel} id={id} aria-label="modelo" className={`${MENU_PANEL} w-60`}>
-          {choices.map((option) => {
-            const checked = isModel(option, model);
-            return (
-              <button
-                key={`${option.provider}:${option.id}`}
-                type="button"
-                role="menuitemradio"
-                aria-checked={checked}
-                onClick={() => {
-                  close(true);
-                  if (!checked) onChange(option);
-                }}
-                className={`${MENU_ITEM} justify-between hover:bg-line focus:bg-line ${
-                  checked ? 'text-accent' : 'hover:text-text focus:text-text'
-                }`}
-              >
-                <span className="min-w-0 truncate">{option.displayName.toLowerCase()}</span>
-                {checked && <Check size={13} aria-hidden className="flex-none" />}
-              </button>
-            );
-          })}
+          {choices.map((option) => (
+            <PickerItem
+              key={`${option.provider}:${option.id}`}
+              label={option.displayName.toLowerCase()}
+              checked={isModel(option, model)}
+              close={close}
+              onPick={() => onChange(option)}
+            />
+          ))}
           <div role="separator" className="-mx-1 my-1 border-t border-line" />
           <button
             type="button"

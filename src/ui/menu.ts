@@ -6,6 +6,10 @@ export const MENU_ITEM =
 export const MENU_PANEL =
   'm-0 border border-line bg-panel p-1 text-sm text-muted';
 
+/** Gatilho discreto dos seletores do composer. */
+export const PICKER_TRIGGER =
+  'group inline-flex min-w-0 items-center gap-1.5 px-1.5 py-1 text-xs text-subtle transition-colors hover:bg-line/60 hover:text-text focus-visible:outline-offset-0 disabled:pointer-events-none disabled:opacity-60 aria-expanded:bg-line/60 aria-expanded:text-text';
+
 const ITEMS = '[role^="menuitem"]';
 const GAP = 4;
 const MARGIN = 8;
