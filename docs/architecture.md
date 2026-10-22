@@ -57,7 +57,7 @@ src/
 
 **Regra de dependência:** `ui → app → ports ← adapters`; todos podem importar `domain`; `domain` não importa ninguém. `app` não importa `adapters` e recebe as implementações por injeção. `main.tsx` é o composition root e injeta as implementações concretas; cada Provedor entra em `Toi` como um `ProviderAdapter` (`info` + `create(key)`) na lista `providers`, e cada Serviço como um `ServiceAdapter` na lista `services`. Provedor e Protocolo são papéis separados dentro de `adapters` ([ADR 0008](adr/0008-provider-and-protocol.md)).
 
-As portas existem por fronteiras reais: `ChatProvider` isola o HTTP de terceiro e permite um segundo Provedor, e `ProviderInfo` é tudo que a UI sabe dele; `WebTools` isola o Serviço das Ferramentas, e `ServiceInfo` é tudo que a UI sabe dele; o storage permite trocar IndexedDB ou usar memória em teste; `Locks` coordena abas por Web Locks; `TokenEstimator` permite substituir a heurística pela contagem exata sem tocar no domínio; `SettingsStore` guarda o cache de Modelos, o último Modelo e o último Esforço, quais Modelos o seletor oferece e o espaço das Rodadas.
+As portas existem por fronteiras reais: `ChatProvider` isola o HTTP de terceiro e permite um segundo Provedor, e `ProviderInfo` é tudo que a UI sabe dele; `WebTools` isola o Serviço das Ferramentas, e `ServiceInfo` é tudo que a UI sabe dele; o storage permite trocar IndexedDB ou usar memória em teste; `Locks` coordena abas por Web Locks; `TokenEstimator` permite substituir a heurística pela contagem exata sem tocar no domínio; `SettingsStore` guarda o cache de Modelos, o último Modelo e o último Esforço, quais Modelos o seletor oferece, o espaço das Rodadas e o Modelo do Título.
 
 ## 4. Ciclo de uma Mensagem
 
@@ -108,7 +108,7 @@ Decisão em [ADR 0010](adr/0010-web-tools-via-tinyfish.md). Com o Serviço conec
 
 Cada Mensagem tem `seq`, um inteiro monotônico por Conversa, atribuído pelo app sob o lock da Conversa — duas abas não calculam o mesmo `seq`. O Dexie indexa `conversationId` e `[conversationId+seq]`; a leitura ordena por `seq`. `createdAt` serve para exibir, não para ordenar.
 
-O Título é derivado na primeira Mensagem do user: os primeiros ~60 caracteres, cortados no limite de palavra. Nenhuma chamada extra ao Modelo só para nomear.
+O Título nasce derivado da primeira Mensagem do user: os primeiros ~60 caracteres, cortados no limite de palavra. Quando a primeira resposta termina `complete`, o Modelo do Título o substitui por um nome curto, sem passar por cima de um Título que a pessoa renomeou (`titleSource`); em qualquer falha fica o derivado ([ADR 0011](adr/0011-generated-title.md)).
 
 ### Coordenação entre abas
 
@@ -147,11 +147,12 @@ Regras do adaptador:
 | `Part` `file` de texto | bloco `document`, `source` `text`, nome em `title` |
 | `ChatRequest.system` | `system`, só quando definido |
 | `ChatRequest.effort` | `output_config.effort`, sempre |
+| `ChatRequest.reasoning` `off` | `thinking` que o Modelo aceita para desligar (`providers/anthropic/thinking.ts`, passado ao Protocolo); sem regra, nenhum |
 | `delta` de texto | `content_block_delta` → `text_delta` |
 | `usage` | `message_start.usage` + `message_delta.usage` |
 | `stopReason` | `message_delta.delta.stop_reason` |
 
-A porta carrega Partes, não texto ([ADR 0003](adr/0003-message-as-parts-and-normalized-events.md)): os Anexos, o raciocínio e as Ferramentas entraram como Partes novas. Os Anexos vão na Mensagem do user antes do texto. `system` existe na porta, mas a v1 não o preenche; system prompt é sempre campo próprio, nunca Mensagem. A porta não tem parâmetros de amostragem. O Esforço vai em todo envio e regula quanto o Modelo raciocina; o raciocínio é gravado, mas não aparece (§1). As Ferramentas vão sem `eager_input_streaming`: os inputs são curtos, e sem ele a API valida cada parâmetro antes de emiti-lo.
+A porta carrega Partes, não texto ([ADR 0003](adr/0003-message-as-parts-and-normalized-events.md)): os Anexos, o raciocínio e as Ferramentas entraram como Partes novas. Os Anexos vão na Mensagem do user antes do texto. `system` só é preenchido no pedido do Título; system prompt é sempre campo próprio, nunca Mensagem. A porta não tem parâmetros de amostragem. O Esforço vai em todo envio e regula quanto o Modelo raciocina; `reasoning: 'off'`, só no pedido do Título, desliga o raciocínio onde o Modelo aceita; o raciocínio é gravado, mas não aparece (§1). As Ferramentas vão sem `eager_input_streaming`: os inputs são curtos, e sem ele a API valida cada parâmetro antes de emiti-lo.
 
 A Anthropic usa o Protocolo `anthropic-messages`; `anthropic-version` é do Protocolo, `x-api-key` e o header de acesso pelo navegador são do Provedor.
 
@@ -164,7 +165,7 @@ anthropic-version: 2026-10-21
 anthropic-dangerous-direct-browser-access: true
 content-type: application/json
 
-{ model, max_tokens, messages, stream: true, output_config: { effort }, system?, tools? }
+{ model, max_tokens, messages, stream: true, output_config: { effort }, system?, thinking?, tools? }
 ```
 
 `max_tokens` é obrigatório. Default: `Math.min(8192, model.max_tokens ?? 8192)`.
@@ -175,7 +176,7 @@ Modelos:
 GET https://api.anthropic.com/v1/models?limit=1000
 ```
 
-Seguimos `has_more`/`last_id` por até 20 páginas e descartamos `lifecycle` diferente de `active` quando presente e os Modelos cujo `capabilities.effort` não aceita a escala inteira de Esforço: sem eles não há nível que falte a um Modelo nem envio sem Esforço. Guardamos `id`, `display_name`, `max_tokens`, `max_input_tokens` e `created_at`, mais o Provedor e a família. Nenhum ID de Modelo é fixo no código; a identidade de um Modelo inclui o Provedor ([ADR 0008](adr/0008-provider-and-protocol.md)).
+Seguimos `has_more`/`last_id` por até 20 páginas e descartamos `lifecycle` diferente de `active` quando presente e os Modelos cujo `capabilities.effort` não aceita a escala inteira de Esforço: sem eles não há nível que falte a um Modelo nem envio sem Esforço. Guardamos `id`, `display_name`, `max_tokens`, `max_input_tokens` e `created_at`, mais o Provedor, a família e se o Modelo responde sem raciocinar (`reasoningOff`). Nenhum ID de Modelo é fixo no código; a identidade de um Modelo inclui o Provedor ([ADR 0008](adr/0008-provider-and-protocol.md)).
 
 O seletor não mostra a lista inteira. A família vem do Provedor; na Anthropic é o primeiro trecho só de letras do id depois de `claude` (`providers/anthropic/models.ts`). A escolha (`settings.modelPicks`) marca famílias, que acompanham a versão mais recente, e Modelos, que fixam uma versão, ambos com Provedor. O padrão são as famílias que cada Provedor sugere no descritor (Sonnet e Haiku na Anthropic), e Configurações lista todas as famílias para marcar outras. Se nenhuma marcação existe para a Chave, o Chat dá lugar ao estado explícito "nenhum modelo marcado existe para esta chave", com o atalho para escolher; não há troca silenciosa por outro Modelo. Um Modelo desmarcado que uma Conversa usa continua aparecendo nela. Falha ao ler ou gravar a escolha aparece em Configurações; gravar é otimista e volta ao estado salvo se falhar.
 
@@ -208,10 +209,10 @@ IndexedDB via Dexie. O schema está em `src/adapters/storage/db.ts`: `conversati
 
 | Store | Conteúdo | Nunca contém |
 |---|---|---|
-| `conversations` | id, título, Provedor, Modelo e Esforço, timestamps | Mensagens |
+| `conversations` | id, título e a origem dele, Provedor, Modelo e Esforço, timestamps | Mensagens |
 | `messages` | id, conversationId, seq, papel, partes (de Anexo, só os metadados; de Ferramenta, o input, o texto entregue ao Modelo, as Fontes e as falhas), estado, timestamps (incluindo o primeiro token), Provedor, Modelo e Esforço, uso, stopReason, erro | Chave |
 | `attachments` | id, conversationId e os bytes preparados (`Blob`) | Chave |
-| `settings` | último Modelo e último Esforço, cache de Modelos por Provedor, Modelos do seletor, espaço das Rodadas | Chave |
+| `settings` | último Modelo e último Esforço, cache de Modelos por Provedor, Modelos do seletor, espaço das Rodadas, Modelo do Título | Chave |
 | `credentials` | Provedor ou Serviço → Chave | Qualquer dado de Conversa |
 
 **Formato gravado:** o adaptador converte o domínio para registros escritos à mão (`adapters/storage/records.ts`) e de volta; como mudar a forma gravada está no [ADR 0007](adr/0007-explicit-persisted-formats.md).
