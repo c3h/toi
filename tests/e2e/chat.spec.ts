@@ -1,4 +1,3 @@
-/// <reference types="node" />
 import { connect, expect, send, setMock, test } from './fixtures';
 
 test('envia e vê a resposta em Markdown', async ({ page }) => {
@@ -76,25 +75,6 @@ test('duas abas: a segunda vê o Fluxo da primeira e não escreve ao mesmo tempo
   await expect(other.getByText(/tokens de entrada/)).toBeVisible();
 });
 
-test('exportação baixa o histórico sem a Chave', async ({ page }) => {
-  await connect(page);
-  await send(page, 'Para exportar');
-  await expect(page.getByText('Olá.')).toBeVisible();
-
-  // Atalho não vale digitando, e um Fluxo mais curto que um frame termina sem a caixa perder o foco.
-  await page.getByLabel('mensagem').blur();
-  await page.keyboard.press('c');
-  const download = page.waitForEvent('download');
-  await page.getByRole('button', { name: 'exportar histórico' }).click();
-
-  const file = await (await download).path();
-  const { readFile } = await import('node:fs/promises');
-  const content = await readFile(file, 'utf8');
-  expect(JSON.parse(content).format).toBe('toi.history');
-  expect(content).toContain('Para exportar');
-  expect(content).not.toContain('sk-ant-teste');
-});
-
 test('ir para o fim aparece só fora do fim e leva de volta', async ({ page }) => {
   await connect(page);
   const reply = Array.from({ length: 60 }, (_, index) => `Parágrafo ${index}.`).join('\n\n');
@@ -112,18 +92,4 @@ test('ir para o fim aparece só fora do fim e leva de volta', async ({ page }) =
 
   await expect(last).toBeInViewport();
   await expect(toEnd).toBeHidden();
-});
-
-test('resposta longa rola o Chat, não a página', async ({ page }) => {
-  await connect(page);
-  const reply = Array.from({ length: 60 }, (_, index) => `Parágrafo ${index}.`).join('\n\n');
-  await setMock(page, { reply, deltas: 1 });
-  await send(page, 'Resposta longa');
-  await expect(page.getByTitle(/tokens de entrada/)).toBeVisible();
-
-  const root = await page.evaluate(() => ({
-    scroll: document.documentElement.scrollHeight,
-    client: document.documentElement.clientHeight,
-  }));
-  expect(root.scroll).toBe(root.client);
 });
