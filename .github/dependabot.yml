@@ -5,7 +5,17 @@ updates:
     schedule:
       interval: weekly
     open-pull-requests-limit: 5
+    # Pacotes presos por peer dependency sobem juntos; separados, o `npm ci` do PR não resolve.
+    groups:
+      vitest:
+        patterns: ['vitest', '@vitest/*', 'vitest-browser-react']
+      vite:
+        patterns: ['vite', '@vitejs/*', '@tailwindcss/vite', 'tailwindcss']
   - package-ecosystem: github-actions
     directory: /
     schedule:
       interval: weekly
+    # O artefato `site` só sobe e desce em `main`: upload e download mudam no mesmo PR.
+    groups:
+      actions:
+        patterns: ['*']
