@@ -43,15 +43,19 @@ O par `owner` + `heartbeatAt` que uma Mensagem `streaming` carrega para indicar 
 _Avoid_: Lock, heartbeat (isolado)
 
 **Provedor**:
-O serviço externo que gera Mensagens. Na v1, apenas a Anthropic.
+O serviço externo que gera Mensagens, com Chave e lista de Modelos próprias. Hoje, apenas a Anthropic.
 _Avoid_: Backend, API, modelo
 
+**Protocolo**:
+O formato de API em que um Provedor atende um Modelo: payload, stream e envelope de erro. Um Provedor pode falar mais de um Protocolo, e um Protocolo pode servir mais de um Provedor.
+_Avoid_: Provedor (quando se fala do formato), dialeto, SDK
+
 **Modelo**:
-Um identificador oferecido pelo Provedor, descoberto pela API e escolhido pela pessoa.
+Um identificador oferecido pelo Provedor, descoberto pela API e escolhido pela pessoa. Só é único junto com o Provedor.
 _Avoid_: Engine, LLM
 
 **Chave**:
-A credencial da Anthropic fornecida pela pessoa, guardada apenas no navegador.
+A credencial de um Provedor fornecida pela pessoa, guardada apenas no navegador; uma por Provedor.
 _Avoid_: Token, secret, senha
 
 **Exportação**:

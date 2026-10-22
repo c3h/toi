@@ -25,7 +25,7 @@ Um chat que responde uma pergunta com um Modelo da Anthropic, com Fluxo, cancela
 
 ## 2. Princípios de desenho
 
-1. **Fronteira explícita.** Domínio puro; rede só em adaptadores; a UI não sabe o que é Anthropic.
+1. **Fronteira explícita.** Domínio puro; rede só em adaptadores; a UI só conhece do Provedor o descritor `ProviderInfo` ([ADR 0008](adr/0008-provider-and-protocol.md)).
 2. **Uma dependência por problema.** Biblioteca só quando o custo de escrever e manter é maior que o de depender.
 
 As prioridades de produto — dado local, previsibilidade sob falha e leveza medível — e as regras operacionais estão em `AGENTS.md`; o orçamento de leveza está na §9.
@@ -37,7 +37,9 @@ src/
   domain/        # tipos e invariantes; zero import externo
   ports/         # contratos e defaults; sem dependência externa
   adapters/
-    anthropic/   # provider, request, sse, stream, models, error, types, fetch
+    http/        # sse, fetchOrThrow, Retry-After
+    protocols/   # um formato de API por pasta; anthropic-messages: request, stream, error, types
+    providers/   # um Provedor por pasta; anthropic: info, fetch, models, provider
     storage/     # db, records, conversations, credentials, settings
     locks/       # web (navigator.locks), memory (fallback)
     tokens/      # heuristic
@@ -48,9 +50,9 @@ src/
 
 `Flow` (`app/flow.ts`) é o módulo do Fluxo em voo e `Toi` (`app/toi.ts`) é a fachada do app; a UI depende só dos dois. Responsabilidades e porquê em [ADR 0005](adr/0005-flow-as-module.md).
 
-**Regra de dependência:** `ui → app → ports ← adapters`; todos podem importar `domain`; `domain` não importa ninguém. `app` não importa `adapters` e recebe as implementações por injeção. `main.tsx` é o composition root e injeta as implementações concretas; o adaptador da Anthropic entra em `Toi` como `createProvider(key)`.
+**Regra de dependência:** `ui → app → ports ← adapters`; todos podem importar `domain`; `domain` não importa ninguém. `app` não importa `adapters` e recebe as implementações por injeção. `main.tsx` é o composition root e injeta as implementações concretas; cada Provedor entra em `Toi` como um `ProviderAdapter` (`info` + `create(key)`) na lista `providers`. Provedor e Protocolo são papéis separados dentro de `adapters` ([ADR 0008](adr/0008-provider-and-protocol.md)).
 
-As portas existem por fronteiras reais: `ChatProvider` isola o HTTP de terceiro e permite um segundo Provedor; o storage permite trocar IndexedDB ou usar memória em teste; `Locks` coordena abas por Web Locks e cai para memória quando o navegador não oferece; `TokenEstimator` permite substituir a heurística pela contagem exata sem tocar no domínio; `SettingsStore` guarda o cache de Modelos e o último Modelo escolhido.
+As portas existem por fronteiras reais: `ChatProvider` isola o HTTP de terceiro e permite um segundo Provedor, e `ProviderInfo` é tudo que a UI sabe dele; o storage permite trocar IndexedDB ou usar memória em teste; `Locks` coordena abas por Web Locks e cai para memória quando o navegador não oferece; `TokenEstimator` permite substituir a heurística pela contagem exata sem tocar no domínio; `SettingsStore` guarda o cache de Modelos, o último Modelo escolhido e quais Modelos o seletor oferece.
 
 ## 4. Ciclo de uma Mensagem
 
@@ -115,23 +117,25 @@ Regras do adaptador:
 | `ChatMessage.parts` | `messages[].content` como lista de blocos |
 | `Part` `text` | bloco `text` |
 | `Part` `reasoning` | bloco `thinking` com `signature` (o `build-request` da v1 não envia) |
-| `ChatRequest.system` / `temperature` | `system` / `temperature`, só quando definidos |
+| `ChatRequest.system` | `system`, só quando definido |
 | `delta` de texto | `content_block_delta` → `text_delta` |
 | `usage` | `message_start.usage` + `message_delta.usage` |
 | `stopReason` | `message_delta.delta.stop_reason` |
 
-A porta carrega Partes, não texto ([ADR 0003](adr/0003-message-as-parts-and-normalized-events.md)): raciocínio, imagem e ferramentas entram sem mudar o contrato. `system` e `temperature` existem na porta, mas a v1 não os preenche; system prompt é sempre campo próprio, nunca Mensagem.
+A porta carrega Partes, não texto ([ADR 0003](adr/0003-message-as-parts-and-normalized-events.md)): raciocínio, imagem e ferramentas entram sem mudar o contrato. `system` existe na porta, mas a v1 não o preenche; system prompt é sempre campo próprio, nunca Mensagem. A porta não tem parâmetros de amostragem.
+
+A Anthropic usa o Protocolo `anthropic-messages`; `anthropic-version` é do Protocolo, `x-api-key` e o header de acesso pelo navegador são do Provedor.
 
 Requisição:
 
 ```
 POST https://api.anthropic.com/v1/messages
 x-api-key: <Chave>
-anthropic-version: 2023-06-01
+anthropic-version: 2026-10-21
 anthropic-dangerous-direct-browser-access: true
 content-type: application/json
 
-{ model, max_tokens, messages, stream: true, system?, temperature? }
+{ model, max_tokens, messages, stream: true, system? }
 ```
 
 `max_tokens` é obrigatório. Default: `Math.min(8192, model.max_tokens ?? 8192)`.
@@ -142,15 +146,17 @@ Modelos:
 GET https://api.anthropic.com/v1/models?limit=1000
 ```
 
-Seguimos `has_more`/`last_id` por até 20 páginas e descartamos `lifecycle` diferente de `active` quando presente. Guardamos `id`, `display_name`, `max_tokens`, `max_input_tokens` e `created_at`. Nenhum ID de Modelo é fixo no código.
+Seguimos `has_more`/`last_id` por até 20 páginas e descartamos `lifecycle` diferente de `active` quando presente. Guardamos `id`, `display_name`, `max_tokens`, `max_input_tokens` e `created_at`, mais o Provedor e a família. Nenhum ID de Modelo é fixo no código; a identidade de um Modelo inclui o Provedor ([ADR 0008](adr/0008-provider-and-protocol.md)).
 
-A lista fica em cache em `settings` (`toi.models()`), gravada por `connect` e por `toi.refreshModels()`; a abertura usa o cache e só lista na API quando ele não existe. Se a listagem falhar, a UI mostra o erro com "tentar de novo" e "trocar Chave" — não há caminho silencioso. Se um refresh falha e existe cache, a lista anterior continua valendo e Configurações a marca como desatualizada, com o erro.
+O seletor não mostra a lista inteira. A família vem do Provedor; na Anthropic é o primeiro trecho só de letras do id depois de `claude` (`providers/anthropic/models.ts`). A escolha (`settings.modelPicks`) marca famílias, que acompanham a versão mais recente, e Modelos, que fixam uma versão, ambos com Provedor. O padrão são as famílias que cada Provedor sugere no descritor (Sonnet e Haiku na Anthropic), e Configurações lista todas as famílias para marcar outras. Se nenhuma marcação existe para a Chave, o Chat dá lugar ao estado explícito "nenhum modelo marcado existe para esta chave", com o atalho para escolher; não há troca silenciosa por outro Modelo. Um Modelo desmarcado que uma Conversa usa continua aparecendo nela. Falha ao ler ou gravar a escolha aparece em Configurações; gravar é otimista e volta ao estado salvo se falhar.
+
+A lista fica em cache em `settings`, uma por Provedor (`toi.models()` junta as dos conectados), gravada por `connect` e por `toi.refreshModels()`; a abertura usa o cache e só lista na API quando ele não existe. Se a listagem falhar, a UI mostra o erro com "tentar de novo" e "trocar Chave" — não há caminho silencioso. Se um refresh falha e existe cache, a lista anterior continua valendo e Configurações a marca como desatualizada, com o erro.
 
 ### Primeira execução
 
 1. Sem Chave: onboarding pede a Chave.
 2. "Validar" = `GET /v1/models` com a Chave candidata. Não gastamos uma chamada de `messages`.
-3. Sucesso: grava a Chave e o cache de Modelos; o default é o último Modelo escolhido ou, sem ele, o mais recente. A Conversa só é criada no primeiro envio.
+3. Sucesso: grava a Chave e o cache de Modelos; o default é o último Modelo escolhido ou, sem ele, o mais recente entre os que o seletor oferece. A Conversa só é criada no primeiro envio.
 4. Falha: erro tipado, sem gravar a Chave, com "tentar de novo".
 5. Lista vazia: estado explícito "nenhum Modelo disponível para esta Chave", com retry.
 
@@ -162,9 +168,9 @@ IndexedDB via Dexie. O schema está em `src/adapters/storage/db.ts`: `conversati
 
 | Store | Conteúdo | Nunca contém |
 |---|---|---|
-| `conversations` | id, título, modelo, timestamps | Mensagens |
-| `messages` | id, conversationId, seq, papel, partes, estado, uso, stopReason, erro, lease | Chave |
-| `settings` | último Modelo, cache de Modelos | Chave |
+| `conversations` | id, título, Provedor e Modelo, timestamps | Mensagens |
+| `messages` | id, conversationId, seq, papel, partes, estado, Provedor e Modelo, uso, stopReason, erro, lease | Chave |
+| `settings` | último Modelo, cache de Modelos por Provedor, Modelos do seletor | Chave |
 | `credentials` | Provedor → Chave | Qualquer dado de Conversa |
 
 **Formato gravado:** o adaptador converte o domínio para registros escritos à mão (`adapters/storage/records.ts`) e de volta; mudar a forma gravada é uma nova `version(n)` com `upgrade()` em `db.ts` ([ADR 0007](adr/0007-explicit-persisted-formats.md)).
@@ -177,15 +183,15 @@ IndexedDB via Dexie. O schema está em `src/adapters/storage/db.ts`: `conversati
 
 **Seleção de Conversa:** estado efêmero da UI, espelhado em `sessionStorage` para sobreviver a reload. Não é `settings`: duas abas podem ter seleções diferentes.
 
-**Modelo:** `conversation.model` é a fonte da verdade. O seletor muda a Conversa atual (`toi.changeModel`, sem mexer em `updatedAt`); `settings.lastModel` só define o default de uma Conversa nova e é gravado ao escolher ou criar.
+**Modelo:** `conversation.provider` + `conversation.model` são a fonte da verdade. O seletor muda a Conversa atual (`toi.changeModel`, sem mexer em `updatedAt`); `settings.lastModel`, também com Provedor, só define o default de uma Conversa nova e é gravado ao escolher ou criar.
 
 **Tema:** preferência visual desta máquina em `localStorage` (`toi:theme`), lida por `public/theme.js` antes do primeiro paint — IndexedDB é assíncrono e o tema piscaria. Não é dado de Conversa; "apagar tudo" também o limpa.
 
-**Duas abas:** a seleção é independente; a barra lateral e a Conversa aberta observam o store (`watchConversations`/`watchMessages`, `liveQuery` no Dexie), então o que outra aba grava aparece sem recarregar — no ritmo do flush, a cada 300 ms; Mensagens de uma Conversa são escritas por uma aba por vez (§4). Metadados da Conversa, como Título e Modelo, seguem last write wins. Sem merge de texto entre abas.
+**Duas abas:** a seleção é independente; a barra lateral e a Conversa aberta observam o store (`watchConversations`/`watchMessages`, `liveQuery` no Dexie), então o que outra aba grava aparece sem recarregar — no ritmo do flush, a cada 300 ms; Mensagens de uma Conversa são escritas por uma aba por vez (§4). Metadados da Conversa, como Título e Modelo, seguem last write wins, e cada mudança é lida e gravada numa só transação (`updateConversation`): o fim de um Fluxo só toca `updatedAt` e não desfaz a troca de Modelo ou o Título que outra aba ou a pessoa mudou enquanto a resposta chegava. Sem merge de texto entre abas.
 
 **Exportação:** `toi.exportHistory()` devolve um retrato do histórico no formato `toi.history` versão 1 (`app/export.ts`); a UI só transforma em arquivo. Lê apenas a porta de Conversas, então a Chave não tem caminho até o arquivo. Mensagem em Fluxo sai como `interrupted` e sem Lease.
 
-**Apagar conversas** limpa `conversations` e `messages`; **apagar tudo** também remove Configurações e Chave, por composição no app ([ADR 0004](adr/0004-indexeddb-separate-credential-store.md)). Duas ações distintas em Configurações, ambas com confirmação explícita na própria linha.
+**Apagar conversas** limpa `conversations` e `messages`; **apagar tudo** também remove Configurações e todas as Chaves, por composição no app ([ADR 0004](adr/0004-indexeddb-separate-credential-store.md)). Duas ações distintas em Configurações, ambas com confirmação explícita na própria linha.
 
 ## 7. Erros
 
@@ -249,8 +255,8 @@ Implementação: `ui/use-messages.ts` junta deltas por frame; `ui/blocks.ts` div
 | Fronteira | O que testa | Como |
 |---|---|---|
 | `domain` | título, normalização de texto e expiração do lease | Vitest puro |
-| `adapters/anthropic` | parser SSE, mappers e classificação de erros HTTP | streams SSE montados no teste: texto, `ping`, `error`, evento desconhecido, chunk cortado no meio de um caractere Unicode; casos principais de status; `retry-after` em segundos e em data com clock fixo |
-| `adapters/storage` | contrato da porta, schema, cascata e fronteira da Chave | `MemoryStore` + Dexie com `fake-indexeddb` |
+| `adapters/http`, `protocols`, `providers` | parser SSE, mappers e classificação de erros HTTP | streams SSE montados no teste: texto, `ping`, `error`, evento desconhecido, chunk cortado no meio de um caractere Unicode; casos principais de status; `retry-after` em segundos e em data com clock fixo |
+| `adapters/storage` | contrato da porta, schema, migração da v1, cascata e fronteira da Chave | `MemoryStore` + Dexie com `fake-indexeddb` |
 | `app/build-request` | fusão de papéis, descarte de Mensagens vazias, truncamento | Vitest puro |
 | `app/send-message` | enviar, abortar, falhar, retry, `finished` terminal, falha de persistência | Provedor fake + store em memória |
 | `app/flow` | um Fluxo por vez, `stop` (também antes do Fluxo começar), `flush`, `exclusive`, sem Provedor, duas abas na mesma Conversa | Provedor fake + store em memória; duas instâncias de `Flow` com os mesmos locks simulam duas abas |
@@ -292,6 +298,6 @@ Sem router na v1: uma tela, Conversa selecionada em estado da UI. Sem SDK de IA:
 4. Contagem exata de tokens via `/v1/messages/count_tokens`.
 5. Busca no histórico e no texto.
 6. Anexos de imagem (base64 na Mensagem; `/v1/files` não suporta CORS).
-7. Segundo Provedor como novo adaptador.
+7. Segundo Provedor (OpenAI, depois OpenCode Go e Google), sobre a separação do [ADR 0008](adr/0008-provider-and-protocol.md).
 8. PWA e uso offline do shell.
 9. Criptografia da Chave com passphrase, se o modelo de ameaça mudar.

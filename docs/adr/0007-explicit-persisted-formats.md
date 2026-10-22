@@ -13,3 +13,4 @@ O IndexedDB gravava os tipos do domínio diretamente, e a exportação congelari
 - Mudança incompatível no arquivo sobe `version`; a importação, quando existir, lê as versões anteriores.
 - Enumerações (`StopReason`, `AppErrorCode`) continuam vindo do domínio: acrescentar um valor é compatível.
 - O contrato do store verifica uma Mensagem com todos os campos na ida e na volta, contra memória e Dexie.
+- A primeira migração é a `version(2)`, que grava o Provedor ([ADR 0008](0008-provider-and-protocol.md)).
