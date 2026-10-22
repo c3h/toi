@@ -5,7 +5,9 @@ import { createToi } from '../../src/app/toi';
 import type { Model } from '../../src/domain/model';
 import type { ChatProvider } from '../../src/ports/chat-provider';
 import { App } from '../../src/ui/App';
+import type { StreamEvent } from '../../src/domain/stream';
 import {
+  deferred,
   FailingProvider,
   gatedProvider,
   makeModel,
@@ -59,10 +61,45 @@ describe('App', () => {
 
     await expect.element(screen.getByText('Primeira pergunta', { exact: true })).toBeVisible();
     await expect.element(screen.getByText('Olá')).toBeVisible();
-    await expect.element(screen.getByText(/10 tokens de entrada/)).toBeVisible();
+    await expect.element(screen.getByTitle('10 tokens de entrada, 0 de saída')).toBeVisible();
+    await expect.element(screen.getByTitle(/até o texto aparecer$/)).toBeVisible();
     await expect
       .element(screen.getByRole('button', { name: 'primeira pergunta', exact: true }))
       .toHaveAttribute('aria-current', 'page');
+  });
+
+  it('revela a resposta aos poucos e só fecha o rodapé com ela inteira', async () => {
+    const reply = Array.from({ length: 60 }, (_, index) => `palavra${index}`).join(' ');
+    // O Fluxo só fecha depois que a tela viu a resposta em `streaming`.
+    const { promise: streamed, resolve: finish } = deferred();
+    const provider = new ScriptedProvider(async function* (): AsyncGenerator<StreamEvent> {
+      for (const event of replyEvents(reply)) {
+        if (event.type === 'finished') await streamed;
+        yield event;
+      }
+    });
+    const screen = await mount(() => provider);
+    await connect(screen);
+    await userEvent.fill(screen.getByLabelText('mensagem'), 'Pergunta');
+    await userEvent.keyboard('{Enter}');
+
+    // Um retrato por frame até o rodapé aparecer.
+    const frames = await new Promise<Array<{ text: string; footer: boolean }>>((resolve) => {
+      const seen: Array<{ text: string; footer: boolean }> = [];
+      const sample = () => {
+        const answer = screen.container.querySelectorAll('article')[1];
+        const footer = answer?.querySelector('[title$="de saída"]') != null;
+        const text = answer?.querySelector('.prose-reply')?.textContent ?? '';
+        seen.push({ text, footer });
+        if (text !== '') finish();
+        if (footer) resolve(seen);
+        else requestAnimationFrame(sample);
+      };
+      sample();
+    });
+
+    expect(frames.some(({ text }) => text !== '' && text !== reply)).toBe(true);
+    expect(frames.filter(({ footer }) => footer).map(({ text }) => text)).toEqual([reply]);
   });
 
   it('esc para o Fluxo, preserva o texto e oferece tentar de novo', async () => {

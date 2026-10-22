@@ -122,7 +122,7 @@ body {
   }
 }
 
-/* Cursor do Fluxo: fica no fim do último elemento da resposta (em lista, do último item), não numa linha própria. */
+/* Cursor do Fluxo, só com a resposta esperando o Provedor (ui/use-reveal.ts): fica no fim do último elemento (em lista, do último item), não numa linha própria. */
 .prose-reply > * + .caret {
   display: none;
 }
@@ -143,6 +143,18 @@ body {
 @keyframes blink {
   to {
     visibility: hidden;
+  }
+}
+
+/* Palavra que acabou de chegar no Fluxo (ui/markdown/Markdown.tsx): só opacidade, sem mexer no layout. */
+.prose-reply .word {
+  /* Sem `fill-mode`: o fim é a opacidade normal, e a animação terminada sai da pilha em vez de seguir viva por palavra. */
+  animation: word-enter 180ms ease-out;
+}
+
+@keyframes word-enter {
+  from {
+    opacity: 0;
   }
 }
 

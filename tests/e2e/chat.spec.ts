@@ -3,12 +3,15 @@ import { connect, expect, send, setMock, test } from './fixtures';
 
 test('envia e vê a resposta em Markdown', async ({ page }) => {
   await connect(page);
-  await setMock(page, { reply: 'Resposta com **ênfase** e `código`.', deltas: 8 });
+  // Com atraso entre deltas o Fluxo tem duração, e a vazão aparece.
+  await setMock(page, { reply: 'Resposta com **ênfase** e `código`.', deltas: 8, delayMs: 20 });
 
   await send(page, 'Primeira pergunta');
 
   await expect(page.locator('strong', { hasText: 'ênfase' })).toBeVisible();
-  await expect(page.getByText(/12 tokens de entrada/)).toBeVisible();
+  await expect(page.getByTitle('12 tokens de entrada, 8 de saída')).toBeVisible();
+  await expect(page.getByTitle(/até o texto aparecer$/)).toBeVisible();
+  await expect(page.getByTitle(/tokens por segundo$/)).toBeVisible();
   await expect(page.getByRole('banner')).toContainText('primeira pergunta');
 });
 
@@ -78,6 +81,8 @@ test('exportação baixa o histórico sem a Chave', async ({ page }) => {
   await send(page, 'Para exportar');
   await expect(page.getByText('Olá.')).toBeVisible();
 
+  // Atalho não vale digitando, e um Fluxo mais curto que um frame termina sem a caixa perder o foco.
+  await page.getByLabel('mensagem').blur();
   await page.keyboard.press('c');
   const download = page.waitForEvent('download');
   await page.getByRole('button', { name: 'exportar histórico' }).click();
@@ -107,4 +112,18 @@ test('ir para o fim aparece só fora do fim e leva de volta', async ({ page }) =
 
   await expect(last).toBeInViewport();
   await expect(toEnd).toBeHidden();
+});
+
+test('resposta longa rola o Chat, não a página', async ({ page }) => {
+  await connect(page);
+  const reply = Array.from({ length: 60 }, (_, index) => `Parágrafo ${index}.`).join('\n\n');
+  await setMock(page, { reply, deltas: 1 });
+  await send(page, 'Resposta longa');
+  await expect(page.getByTitle(/tokens de entrada/)).toBeVisible();
+
+  const root = await page.evaluate(() => ({
+    scroll: document.documentElement.scrollHeight,
+    client: document.documentElement.clientHeight,
+  }));
+  expect(root.scroll).toBe(root.client);
 });

@@ -1,9 +1,21 @@
-import { ArrowDown, ArrowUp, RotateCcw, Square, X } from 'lucide-react';
+import {
+  ArrowDown,
+  ArrowUp,
+  Hash,
+  RotateCcw,
+  Square,
+  Timer,
+  X,
+  Zap,
+  type LucideIcon,
+} from 'lucide-react';
 import {
   memo,
+  useCallback,
   useEffect,
   useImperativeHandle,
   useLayoutEffect,
+  useMemo,
   useRef,
   useState,
   type KeyboardEvent,
@@ -12,13 +24,14 @@ import {
 import type { ProviderInfo, Toi } from '../app/toi';
 import { messageFor, type AppErrorInfo } from '../domain/error';
 import type { ConversationId } from '../domain/ids';
-import { textOf, type Message } from '../domain/message';
+import { finalUsageOf, textOf, timingOf, type Message } from '../domain/message';
 import { findModel, refFrom, type Model } from '../domain/model';
 import { CopyButton } from './CopyButton';
 import { ModelPicker } from './ModelPicker';
 import { preloadMarkdown, Prose } from './Prose';
-import { formatTokens, lower } from './support';
+import { formatSeconds, formatTokens, lower } from './support';
 import { useMessages } from './use-messages';
+import { useReveal } from './use-reveal';
 
 export type Notice =
   { kind: 'error'; error: AppErrorInfo } | { kind: 'truncated' } | { kind: 'not_saved' };
@@ -58,22 +71,46 @@ const NOTICE_TEXT: Record<Exclude<Notice['kind'], 'error'>, string> = {
   not_saved: 'a resposta chegou, mas não foi salva no navegador.',
 };
 
-const metaLine = (message: Message, models: Model[]): string[] => {
-  const parts: string[] = [];
+const modelName = (message: Message, models: Model[]): string | null => {
+  if (!message.model) return null;
   const model = findModel(models, refFrom(message));
-  if (message.model) parts.push((model?.displayName ?? message.model).toLowerCase());
+  return (model?.displayName ?? message.model).toLowerCase();
+};
 
-  // Fora de `complete` a contagem de saída é parcial e enganaria.
-  if (message.usage && message.status === 'complete') {
-    const input =
-      message.usage.inputTokens +
-      message.usage.cacheCreationInputTokens +
-      message.usage.cacheReadInputTokens;
-    parts.push(`${formatTokens(input)} tokens de entrada`);
-    parts.push(`${formatTokens(message.usage.outputTokens)} de saída`);
+/** Uma medida do rodapé: curta à vista, por extenso no `title` e para leitor de tela. */
+interface Stat {
+  icon: LucideIcon;
+  short: string;
+  label: string;
+}
+
+/** Na ordem em que a resposta acontece: espera, ritmo, tamanho. */
+const statsOf = (message: Message): Stat[] => {
+  const usage = finalUsageOf(message);
+  if (!usage) return [];
+
+  const stats: Stat[] = [];
+  const timing = timingOf(message);
+  if (timing) {
+    const wait = formatSeconds(timing.firstTokenMs);
+    stats.push({ icon: Timer, short: wait, label: `${wait} até o texto aparecer` });
+
+    if (timing.tokensPerSecond !== null) {
+      const rate = formatTokens(Math.round(timing.tokensPerSecond));
+      stats.push({ icon: Zap, short: `${rate} tok/s`, label: `${rate} tokens por segundo` });
+    }
   }
-  if (message.stopReason === 'max_tokens') parts.push('cortada no limite de tokens');
-  return parts;
+
+  const input = formatTokens(
+    usage.inputTokens + usage.cacheCreationInputTokens + usage.cacheReadInputTokens,
+  );
+  const output = formatTokens(usage.outputTokens);
+  stats.push({
+    icon: Hash,
+    short: `${input} → ${output}`,
+    label: `${input} tokens de entrada, ${output} de saída`,
+  });
+  return stats;
 };
 
 interface MessageViewProps {
@@ -83,22 +120,32 @@ interface MessageViewProps {
   onRetry: (message: Message) => void;
 }
 
-const MessageView = memo(({ message, models, retryable, onRetry }: MessageViewProps) => {
-  const text = textOf(message);
+const MessageView = memo((props: MessageViewProps) => {
+  if (props.message.role === 'assistant') return <Reply {...props} />;
 
-  if (message.role === 'user') {
-    return (
-      <article className="flex gap-3 text-base text-text">
-        <span className="select-none text-accent" aria-hidden="true">
-          &gt;
-        </span>
-        <p className="min-w-0 whitespace-pre-wrap [overflow-wrap:anywhere]">{text}</p>
-      </article>
-    );
-  }
+  return (
+    <article className="flex gap-3 text-base text-text">
+      <span className="select-none text-accent" aria-hidden="true">
+        &gt;
+      </span>
+      <p className="min-w-0 whitespace-pre-wrap [overflow-wrap:anywhere]">
+        {textOf(props.message)}
+      </p>
+    </article>
+  );
+});
 
-  const meta = metaLine(message, models);
-  const copyable = message.status !== 'streaming' && text.trim() !== '';
+/** Componente próprio por causa da revelação, que a Mensagem do user não tem. */
+const Reply = ({ message, models, retryable, onRetry }: MessageViewProps) => {
+  // A revelação re-renderiza a cada frame, mesmo sem a Mensagem mudar.
+  const text = useMemo(() => textOf(message), [message]);
+  const { shown, revealing, waiting, animate } = useReveal(text, message.status);
+
+  const name = modelName(message, models);
+  // O rodapé de fechamento espera o texto inteiro estar à vista.
+  const stats = revealing ? [] : statsOf(message);
+  const cut = !revealing && message.stopReason === 'max_tokens';
+  const copyable = !revealing && text.trim() !== '';
   const status =
     message.status === 'failed'
       ? lower(message.error?.message ?? messageFor('unknown'))
@@ -107,16 +154,24 @@ const MessageView = memo(({ message, models, retryable, onRetry }: MessageViewPr
         : null;
 
   return (
-    <article aria-busy={message.status === 'streaming'}>
-      <Prose text={text} streaming={message.status === 'streaming'} />
-      {(status || meta.length > 0 || retryable || copyable) && (
+    <article aria-busy={revealing}>
+      <Prose text={shown} open={revealing} animate={animate} caret={waiting} />
+      {(status || name || stats.length > 0 || cut || retryable || copyable) && (
         <footer className="mt-3 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-subtle">
           {status && (
             <span className={message.status === 'failed' ? 'text-danger' : 'text-muted'}>
               {status}
             </span>
           )}
-          {meta.length > 0 && <span>{meta.join(' · ')}</span>}
+          {name && <span>{name}</span>}
+          {stats.map(({ icon: Icon, short, label }) => (
+            <span key={label} title={label} className="inline-flex items-center gap-1">
+              <Icon size={12} aria-hidden />
+              <span aria-hidden>{short}</span>
+              <span className="sr-only">{label}</span>
+            </span>
+          ))}
+          {cut && <span>cortada no limite de tokens</span>}
           {copyable && (
             <CopyButton text={text} className="inline-flex items-center gap-1 hover:text-text" />
           )}
@@ -134,7 +189,7 @@ const MessageView = memo(({ message, models, retryable, onRetry }: MessageViewPr
       )}
     </article>
   );
-});
+};
 
 const nearBottom = (element: HTMLElement): boolean =>
   element.scrollHeight - element.scrollTop - element.clientHeight < 64;
@@ -169,11 +224,16 @@ export const Chat = ({
 
   useImperativeHandle(ref, () => ({ focus: () => input.current?.focus() }), []);
 
-  // Acompanha o fim só se a pessoa já estava lá.
-  useLayoutEffect(() => {
-    const element = scroller.current;
-    if (element && following.current) element.scrollTop = element.scrollHeight;
-  }, [messages]);
+  // Acompanha o fim só se a pessoa já estava lá. A lista cresce com Mensagens
+  // novas e com a revelação, que avança entre uma mudança de Mensagens e outra.
+  const followList = useCallback((content: HTMLDivElement) => {
+    const observer = new ResizeObserver(() => {
+      const element = scroller.current;
+      if (element && following.current) element.scrollTop = element.scrollHeight;
+    });
+    observer.observe(content);
+    return () => observer.disconnect();
+  }, []);
 
   useLayoutEffect(() => {
     const element = input.current;
@@ -211,7 +271,8 @@ export const Chat = ({
     <section className="flex min-h-0 flex-1 flex-col">
       <div
         ref={scroller}
-        className="min-h-0 flex-1 overflow-y-auto px-4 pt-8 pb-6 sm:px-8"
+        // `relative`: o que é absoluto dentro (como `sr-only`) rola aqui, não estica a página.
+        className="relative min-h-0 flex-1 overflow-y-auto px-4 pt-8 pb-6 sm:px-8"
         onScroll={(event) => {
           following.current = nearBottom(event.currentTarget);
           setAtBottom(following.current);
@@ -241,7 +302,7 @@ export const Chat = ({
             </ul>
           </div>
         ) : (
-          <div className="mx-auto flex max-w-[44rem] flex-col gap-9">
+          <div ref={followList} className="mx-auto flex max-w-[44rem] flex-col gap-9">
             {messages.map((message) => (
               <MessageView
                 key={message.id}

@@ -30,7 +30,20 @@ export const selection = {
   },
 };
 
-export const formatTokens = (count: number): string => new Intl.NumberFormat('pt-BR').format(count);
+// Criados uma vez: cada rodapé formata várias medidas, e criar um resolve o locale de novo.
+const TOKENS = new Intl.NumberFormat('pt-BR');
+const SECONDS = new Intl.NumberFormat('pt-BR', {
+  style: 'unit',
+  unit: 'second',
+  unitDisplay: 'short',
+  minimumFractionDigits: 1,
+  maximumFractionDigits: 1,
+});
+
+export const formatTokens = (count: number): string => TOKENS.format(count);
+
+/** Sempre com uma casa: "0,8 s", "1,0 s". */
+export const formatSeconds = (ms: number): string => SECONDS.format(ms / 1000);
 
 export const downloadJson = (name: string, value: unknown): void => {
   const url = URL.createObjectURL(
