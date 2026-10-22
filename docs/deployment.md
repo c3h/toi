@@ -45,6 +45,11 @@ os assets continuam recebendo a compressão do Cloudflare. O Network Error
 Logging (NEL) da zona também precisa ficar desativado, pois instrui o navegador
 a enviar relatórios de rede ao Cloudflare.
 
+Os arquivos de `/assets/` têm hash no nome e são servidos como `immutable` por
+um ano; o HTML revalida a cada abertura e aponta para os nomes novos. Cada
+deploy apaga os chunks anteriores; o efeito numa aba aberta antes dele está em
+[architecture.md](architecture.md#9-performance).
+
 ## Publicar uma instância própria
 
 1. Faça um fork e siga [CONTRIBUTING.md](../CONTRIBUTING.md) para preparar o ambiente.
