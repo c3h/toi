@@ -3,6 +3,9 @@ import type { JsonObject } from '../../../domain/json';
 import type { Effort } from '../../../domain/model';
 import type { ChatRequest, OutgoingPart, ToolDefinition } from '../../../ports/chat-provider';
 
+/** Como a API recebe o pedido de responder sem raciocinar; quem aceita qual é do Provedor. */
+export type ThinkingOff = { type: 'disabled' } | { type: 'between_tools' };
+
 export type AnthropicContentBlock =
   | { type: 'text'; text: string }
   | { type: 'thinking'; thinking: string; signature: string }
@@ -23,6 +26,7 @@ export interface AnthropicPayload {
   max_tokens: number;
   stream: true;
   system?: string;
+  thinking?: ThinkingOff;
   output_config: { effort: Effort };
   tools?: AnthropicTool[];
   messages: Array<{ role: 'user' | 'assistant'; content: AnthropicContentBlock[] }>;
@@ -104,12 +108,19 @@ const toContentBlock = async (part: OutgoingPart): Promise<AnthropicContentBlock
   }
 };
 
-/** Lê os bytes dos Anexos aqui, para viverem só até o corpo da requisição sair. */
-export const toAnthropicPayload = async (request: ChatRequest): Promise<AnthropicPayload> => ({
+/**
+ * Lê os bytes dos Anexos aqui, para viverem só até o corpo da requisição sair.
+ * Sem `thinking`, os Modelos atuais raciocinam de forma adaptativa no Esforço dado.
+ */
+export const toAnthropicPayload = async (
+  request: ChatRequest,
+  thinking: ThinkingOff | null,
+): Promise<AnthropicPayload> => ({
   model: request.model,
   max_tokens: request.maxTokens,
   stream: true,
   ...(request.system === undefined ? {} : { system: request.system }),
+  ...(thinking === null ? {} : { thinking }),
   output_config: { effort: request.effort },
   ...(request.tools.length === 0 ? {} : { tools: request.tools.map(toTool) }),
   messages: await Promise.all(

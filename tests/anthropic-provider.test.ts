@@ -32,6 +32,7 @@ describe('AnthropicProvider', () => {
           model: 'claude-test',
           maxTokens: 128,
           effort: 'low',
+          reasoning: 'on',
           tools: [],
           messages: [{ role: 'user', parts: [{ type: 'text', text: 'oi' }] }],
         },
@@ -59,23 +60,27 @@ describe('AnthropicProvider', () => {
   });
 
   it('manda imagem e PDF em base64 e texto de arquivo como documento com título', async () => {
-    const payload = await toAnthropicPayload({
-      model: 'claude-test',
-      maxTokens: 128,
-      effort: 'low',
-      tools: [],
-      messages: [
-        {
-          role: 'user',
-          parts: [
-            sent(imageFile('foto'), new Uint8Array([1, 2, 3])),
-            sent(pdfFile('contrato'), '%PDF-'),
-            sent(textFile('notas'), '# oi'),
-            { type: 'text', text: 'resuma' },
-          ],
-        },
-      ],
-    });
+    const payload = await toAnthropicPayload(
+      {
+        model: 'claude-test',
+        maxTokens: 128,
+        effort: 'low',
+        reasoning: 'on',
+        tools: [],
+        messages: [
+          {
+            role: 'user',
+            parts: [
+              sent(imageFile('foto'), new Uint8Array([1, 2, 3])),
+              sent(pdfFile('contrato'), '%PDF-'),
+              sent(textFile('notas'), '# oi'),
+              { type: 'text', text: 'resuma' },
+            ],
+          },
+        ],
+      },
+      null,
+    );
 
     expect(payload.messages[0]!.content).toEqual([
       { type: 'image', source: { type: 'base64', media_type: 'image/png', data: 'AQID' } },
@@ -94,27 +99,31 @@ describe('AnthropicProvider', () => {
   });
 
   it('manda as Ferramentas e as Rodadas com raciocínio, chamada e resultado', async () => {
-    const payload = await toAnthropicPayload({
-      model: 'claude-test',
-      maxTokens: 128,
-      effort: 'low',
-      tools: [{ name: 'web_search', description: 'Busca.', inputSchema: { type: 'object' } }],
-      messages: [
-        { role: 'user', parts: [{ type: 'text', text: 'cobre hoje?' }] },
-        {
-          role: 'assistant',
-          parts: [
-            { type: 'reasoning', text: 'buscar', signature: 'sig' },
-            { type: 'redacted_reasoning', data: 'cifrado' },
-            { type: 'tool_call', callId: 't1', tool: 'web_search', input: { query: 'cobre' } },
-          ],
-        },
-        {
-          role: 'user',
-          parts: [{ type: 'tool_result', callId: 't1', content: 'Error: x', isError: true }],
-        },
-      ],
-    });
+    const payload = await toAnthropicPayload(
+      {
+        model: 'claude-test',
+        maxTokens: 128,
+        effort: 'low',
+        reasoning: 'on',
+        tools: [{ name: 'web_search', description: 'Busca.', inputSchema: { type: 'object' } }],
+        messages: [
+          { role: 'user', parts: [{ type: 'text', text: 'cobre hoje?' }] },
+          {
+            role: 'assistant',
+            parts: [
+              { type: 'reasoning', text: 'buscar', signature: 'sig' },
+              { type: 'redacted_reasoning', data: 'cifrado' },
+              { type: 'tool_call', callId: 't1', tool: 'web_search', input: { query: 'cobre' } },
+            ],
+          },
+          {
+            role: 'user',
+            parts: [{ type: 'tool_result', callId: 't1', content: 'Error: x', isError: true }],
+          },
+        ],
+      },
+      null,
+    );
 
     expect(payload.tools).toEqual([
       { name: 'web_search', description: 'Busca.', input_schema: { type: 'object' } },
@@ -133,5 +142,37 @@ describe('AnthropicProvider', () => {
         content: [{ type: 'tool_result', tool_use_id: 't1', content: 'Error: x', is_error: true }],
       },
     ]);
+  });
+
+  it('raciocínio desligado vira o `thinking` que cada Modelo aceita', async () => {
+    const thinkingFor = async (model: string) => {
+      let body = '';
+      const fetchImpl: FetchLike = async (_, init) => {
+        body = init?.body as string;
+        return new Response(
+          streamOf([sse([{ event: 'message_stop', data: { type: 'message_stop' } }])]),
+          { status: 200, headers: { 'content-type': 'text/event-stream' } },
+        );
+      };
+      await collect(
+        new AnthropicProvider('sk-test', fetchImpl).stream(
+          {
+            model,
+            maxTokens: 64,
+            effort: 'low',
+            reasoning: 'off',
+            tools: [],
+            messages: [{ role: 'user', parts: [{ type: 'text', text: 'oi' }] }],
+          },
+          new AbortController().signal,
+        ),
+      );
+      return JSON.parse(body).thinking;
+    };
+
+    expect(await thinkingFor('claude-haiku-5-5')).toEqual({ type: 'disabled' });
+    expect(await thinkingFor('claude-sonnet-5-5')).toEqual({ type: 'between_tools' });
+    // Opus 5.5 e Fable recusam desligar: o pedido vai sem `thinking`, no Esforço dado.
+    expect(await thinkingFor('claude-opus-5-5')).toBeUndefined();
   });
 });
