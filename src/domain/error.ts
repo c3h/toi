@@ -16,6 +16,16 @@ export type AppErrorCode =
   | 'flow_busy'
   | 'storage_failed'
   | 'storage_full'
+  | 'tool_invalid_credential'
+  | 'tool_quota_exhausted'
+  | 'tool_rate_limited'
+  | 'tool_invalid_input'
+  | 'tool_forbidden'
+  | 'tool_url_not_eligible'
+  | 'tool_call_limit'
+  | 'tool_unreachable'
+  | 'tool_bad_response'
+  | 'tool_limit'
   | 'unknown';
 
 export interface AppErrorOptions {
@@ -42,6 +52,16 @@ const MESSAGES: Record<AppErrorCode, string> = {
   flow_busy: 'Espere a operação atual terminar, nesta ou em outra aba.',
   storage_failed: 'Não foi possível salvar tudo no navegador.',
   storage_full: 'O navegador ficou sem espaço para salvar esta Mensagem.',
+  tool_invalid_credential: 'A Chave da busca na web foi recusada.',
+  tool_quota_exhausted: 'A cota diária da busca na web acabou.',
+  tool_rate_limited: 'Limite de buscas por minuto atingido.',
+  tool_invalid_input: 'O serviço de busca recusou o pedido do Modelo.',
+  tool_forbidden: 'O serviço de busca não permitiu o pedido.',
+  tool_url_not_eligible: 'O Modelo pediu um endereço que não está na conversa.',
+  tool_call_limit: 'O Modelo passou do limite de buscas desta resposta.',
+  tool_unreachable: 'Não foi possível falar com o serviço de busca.',
+  tool_bad_response: 'O serviço de busca enviou uma resposta ilegível.',
+  tool_limit: 'A resposta passou do limite de buscas e leituras.',
   unknown: 'Algo deu errado.',
 };
 
@@ -70,6 +90,10 @@ export const asAppError = (error: unknown): AppError =>
 /** O Fluxo fechou sem `finished`: a conexão caiu no meio da resposta. */
 export const truncatedError = (): AppError =>
   new AppError('unreachable', 'A resposta terminou antes do fim.');
+
+/** O Modelo encerrou a Rodada com um pedido de Ferramenta que não fecha em JSON. */
+export const brokenToolCallError = (): AppError =>
+  new AppError('unknown', 'A resposta trouxe um pedido de ferramenta ilegível.');
 
 /** Os bytes de um Anexo sumiram do navegador; a requisição não sai sem eles. */
 export const missingAttachmentError = (): AppError =>

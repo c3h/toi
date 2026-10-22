@@ -20,3 +20,10 @@ export const emptyUsage = (): Usage => ({
   cacheCreationInputTokens: 0,
   cacheReadInputTokens: 0,
 });
+
+export const addUsage = (a: Usage, b: Usage): Usage => ({
+  inputTokens: a.inputTokens + b.inputTokens,
+  outputTokens: a.outputTokens + b.outputTokens,
+  cacheCreationInputTokens: a.cacheCreationInputTokens + b.cacheCreationInputTokens,
+  cacheReadInputTokens: a.cacheReadInputTokens + b.cacheReadInputTokens,
+});
