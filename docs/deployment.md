@@ -14,9 +14,19 @@ valida o pacote de publicação com `wrangler deploy --dry-run` em pull requests
 e pushes para `main`. A versão de Node vem de [.node-version](../.node-version)
 e as dependências são instaladas pelo lockfile com `npm ci`.
 
-A branch `main` exige o check `check` antes do merge. O Cloudflare Workers
-Builds acompanha essa branch, gera os arquivos com `npm run build` e publica
-com `npm run deploy`. Pull requests não recebem credenciais de deploy.
+A branch `main` exige o check `check` antes do merge. Em pushes para ela, ou
+execuções manuais do workflow nessa branch, o CI guarda `dist` como artefato
+`site`. O job `deploy` só começa depois do gate e publica esse mesmo artefato
+com `npm run deploy`. Ao final, confere HTTPS, o HTML publicado contra o build,
+a CSP e a ausência de relatórios de rede. Uma nova execução de produção espera
+a anterior terminar; atualizar um pull request cancela seu CI anterior.
+
+O ambiente GitHub `production` aceita somente branches protegidas; `main` é
+a única branch protegida. Ele guarda o segredo `CLOUDFLARE_API_TOKEN` e a
+variável `CLOUDFLARE_ACCOUNT_ID`. O token tem `Workers Scripts: Edit` na conta,
+`Workers Routes: Edit` e `Zone: Read` apenas na zona do domínio. Não tem
+permissões de R2, KV ou bancos. A permissão de Workers é por conta e também
+alcança os outros Workers dela. Pull requests não executam o job de deploy.
 
 A configuração do destino e do domínio está em
 [wrangler.jsonc](../wrangler.jsonc). O host aplica os headers de
@@ -37,9 +47,11 @@ a enviar relatórios de rede ao Cloudflare.
 
 1. Faça um fork e siga [CONTRIBUTING.md](../CONTRIBUTING.md) para preparar o ambiente.
 2. Mude `name` e `routes` em `wrangler.jsonc` para seu Worker e seu domínio.
-3. No Cloudflare, conecte o repositório ao Workers Builds, com os comandos de
-   build e deploy descritos acima, e proteja a branch de produção com o CI.
-4. Confira o HTTPS e o header `Content-Security-Policy` na URL publicada.
+3. Proteja a branch de produção com o CI. No GitHub, crie o ambiente `production`,
+   limitado a essa branch, e configure a variável e o segredo descritos acima
+   com sua conta e um token restrito à publicação. Ajuste também a URL do ambiente
+   e da verificação no workflow para seu domínio.
+4. Desative NEL na zona Cloudflare e confira HTTPS, HTML e headers na URL publicada.
 
 O domínio precisa estar na conta Cloudflare que publica o Worker. Para publicar
 do terminal, autentique o Wrangler nessa conta e execute `npm run build` seguido
@@ -47,9 +59,11 @@ de `npm run deploy`.
 
 ## Falha e reversão
 
-Um CI que falha impede o merge; um build ou deploy que falha mantém a versão
-publicada. Para voltar uma mudança, reverta o commit por pull request e deixe
-o pipeline publicar novamente. Para uma reversão imediata, use o rollback de
+Um CI que falha impede o merge; uma falha no gate impede o job de deploy.
+Falha na publicação ou na conferência final aparece no Actions: confira a URL
+e a versão no Cloudflare antes de decidir a reversão. Para voltar uma mudança,
+reverta o commit por pull request e deixe o pipeline publicar novamente.
+Para uma reversão imediata, use o rollback de
 uma versão anterior na aba Deployments do Worker e depois reverta o código.
 
 O armazenamento Local pertence à origem do navegador: mudar de domínio não
