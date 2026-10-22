@@ -30,6 +30,8 @@ const codeForStatus = (status: number, apiType: string, detail: string): AppErro
     if (/prompt is too long|context|too many tokens|input length/i.test(detail)) {
       return 'context_overflow';
     }
+    // O status não separa o anexo recusado (páginas, imagem ilegível ou grande) dos outros 400.
+    if (/\b(image|pdf|document)s?\b|\bpages?\b/i.test(detail)) return 'attachment_rejected';
     return 'invalid_request';
   }
 

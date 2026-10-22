@@ -39,4 +39,24 @@ describe('anthropicErrors.fromResponse', () => {
 
     expect(error.code).toBe('context_overflow');
   });
+
+  it('separa o anexo recusado dos outros 400', async () => {
+    const classify = async (detail: string) =>
+      (
+        await anthropicErrors.fromResponse(
+          jsonResponse(400, errorEnvelope('invalid_request_error', detail)),
+          NOW,
+        )
+      ).code;
+
+    expect(
+      await classify('messages.0.content.0.document: A maximum of 100 PDF pages may be provided.'),
+    ).toBe('attachment_rejected');
+    expect(
+      await classify('messages.0.content.1.image.source.base64: image exceeds 5 MB maximum'),
+    ).toBe('attachment_rejected');
+    expect(await classify('messages: roles must alternate between "user" and "assistant"')).toBe(
+      'invalid_request',
+    );
+  });
 });

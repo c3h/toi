@@ -1,8 +1,13 @@
 import Dexie, { liveQuery } from 'dexie';
 import type { Conversation } from '../../domain/conversation';
-import type { ConversationId, MessageId } from '../../domain/ids';
+import { appError, missingAttachmentError } from '../../domain/error';
+import type { AttachmentId, ConversationId, MessageId } from '../../domain/ids';
 import type { Message } from '../../domain/message';
-import type { ConversationStore } from '../../ports/conversation-store';
+import type {
+  ConversationStore,
+  HistorySnapshot,
+  TurnWrite,
+} from '../../ports/conversation-store';
 import type { ToiDatabase } from './db';
 import {
   fromConversationRecord,
@@ -47,10 +52,37 @@ export class DexieConversationStore implements ConversationStore {
     });
   }
 
+  async startTurn(turn: TurnWrite): Promise<Conversation | null> {
+    const { conversations, messages, attachments } = this.#db;
+
+    try {
+      return await this.#db.transaction('rw', [conversations, messages, attachments], async () => {
+        const record = await conversations.get(turn.conversationId);
+        if (!record) return null;
+
+        const updated = turn.change(fromConversationRecord(record));
+        await conversations.put(toConversationRecord(updated));
+        await messages.bulkPut(turn.messages.map(toMessageRecord));
+        await attachments.bulkPut(
+          turn.attachments.map(({ attachment, blob }) => ({
+            id: attachment.id,
+            conversationId: turn.conversationId,
+            blob,
+          })),
+        );
+        return updated;
+      });
+    } catch (cause) {
+      throw appError(isQuotaError(cause) ? 'storage_full' : 'storage_failed', { cause });
+    }
+  }
+
   async deleteConversation(id: ConversationId): Promise<void> {
-    await this.#db.transaction('rw', this.#db.conversations, this.#db.messages, async () => {
-      await this.#db.conversations.delete(id);
-      await this.#db.messages.where('conversationId').equals(id).delete();
+    const { conversations, messages, attachments } = this.#db;
+    await this.#db.transaction('rw', [conversations, messages, attachments], async () => {
+      await conversations.delete(id);
+      await messages.where('conversationId').equals(id).delete();
+      await attachments.where('conversationId').equals(id).delete();
     });
   }
 
@@ -71,15 +103,51 @@ export class DexieConversationStore implements ConversationStore {
     await this.#db.messages.put(toMessageRecord(message));
   }
 
+  async readAttachments(ids: AttachmentId[]): Promise<Blob[]> {
+    const records = await this.#db.attachments.bulkGet(ids);
+    return records.map((record) => {
+      if (!record) throw missingAttachmentError();
+      return record.blob;
+    });
+  }
+
   async listStreamingMessages(): Promise<Message[]> {
     const records = await this.#db.messages.where('status').equals('streaming').toArray();
     return records.map(fromMessageRecord);
   }
 
   async clearConversations(): Promise<void> {
-    await this.#db.transaction('rw', this.#db.conversations, this.#db.messages, async () => {
-      await this.#db.conversations.clear();
-      await this.#db.messages.clear();
+    const { conversations, messages, attachments } = this.#db;
+    await this.#db.transaction('rw', [conversations, messages, attachments], async () => {
+      await conversations.clear();
+      await messages.clear();
+      await attachments.clear();
+    });
+  }
+
+  snapshot(): Promise<HistorySnapshot> {
+    const { conversations, messages, attachments } = this.#db;
+    return this.#db.transaction('r', [conversations, messages, attachments], async () => {
+      const [conversationRecords, messageRecords, attachmentRecords] = await Promise.all([
+        conversations.orderBy('updatedAt').reverse().toArray(),
+        messages.orderBy('[conversationId+seq]').toArray(),
+        attachments.toArray(),
+      ]);
+
+      const byConversation = new Map<ConversationId, Message[]>();
+      for (const record of messageRecords) {
+        const list = byConversation.get(record.conversationId) ?? [];
+        list.push(fromMessageRecord(record));
+        byConversation.set(record.conversationId, list);
+      }
+
+      return {
+        conversations: conversationRecords.map((record) => ({
+          conversation: fromConversationRecord(record),
+          messages: byConversation.get(record.id) ?? [],
+        })),
+        attachments: new Map(attachmentRecords.map((record) => [record.id, record.blob])),
+      };
     });
   }
 
@@ -94,6 +162,16 @@ export class DexieConversationStore implements ConversationStore {
     return watch(() => this.listMessages(conversationId), listener);
   }
 }
+
+/** O Dexie embrulha o erro do IndexedDB quando a transação aborta; a causa fica em `inner`. */
+const isQuotaError = (error: unknown): boolean => {
+  let current = error;
+  while (current instanceof Error) {
+    if (current.name === 'QuotaExceededError') return true;
+    current = (current as { inner?: unknown }).inner;
+  }
+  return false;
+};
 
 /** `liveQuery` reexecuta a leitura quando a tabela muda, também em outra aba. */
 const watch = <T>(query: () => Promise<T>, listener: (value: T) => void): (() => void) => {

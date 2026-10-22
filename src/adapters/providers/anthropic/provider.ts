@@ -36,7 +36,7 @@ export class AnthropicProvider implements ChatProvider {
       {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify(toAnthropicPayload(request)),
+        body: JSON.stringify(await toAnthropicPayload(request)),
         signal,
       },
       this.#clock,

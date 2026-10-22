@@ -1,16 +1,22 @@
+import type { Attachment, AttachmentUpload } from '../src/domain/attachment';
 import type { Conversation } from '../src/domain/conversation';
-import { appError } from '../src/domain/error';
-import type { Message } from '../src/domain/message';
+import { appError, missingAttachmentError } from '../src/domain/error';
+import type { Message, Part } from '../src/domain/message';
 import type { Effort, Model, ModelPicks, ModelRef } from '../src/domain/model';
 import type { ProviderId } from '../src/domain/ids';
 import type { StreamEvent } from '../src/domain/stream';
 import { emptyUsage } from '../src/domain/usage';
 import type { ChatProvider, ChatRequest, ProviderAdapter } from '../src/ports/chat-provider';
 import type { FlowDeps } from '../src/app/flow';
+import type { SendOptions } from '../src/app/send-message';
 import { anthropicInfo } from '../src/adapters/providers/anthropic/info';
 import { anthropicFamily } from '../src/adapters/providers/anthropic/models';
 import type { Clock } from '../src/ports/clock';
-import type { ConversationStore } from '../src/ports/conversation-store';
+import type {
+  ConversationStore,
+  HistorySnapshot,
+  TurnWrite,
+} from '../src/ports/conversation-store';
 import type { CredentialStore } from '../src/ports/credential-store';
 import type { LockMode, Locks, Release } from '../src/ports/locks';
 import type { SettingsStore } from '../src/ports/settings-store';
@@ -80,6 +86,39 @@ export const makeMessage = (
   ...overrides,
 });
 
+const upload = (attachment: Attachment, blob: Blob): AttachmentUpload => ({ attachment, blob });
+
+/** Bytes de mentira do tamanho pedido: o teste não lê imagem nem PDF. */
+const bytes = (size: number, type: string): Blob => new Blob([new Uint8Array(size)], { type });
+
+export const textFile = (id: string, content = 'conteúdo'): AttachmentUpload => {
+  const blob = new Blob([content], { type: 'text/plain' });
+  return upload({ id, kind: 'text', name: `${id}.txt`, size: blob.size }, blob);
+};
+
+export const pdfFile = (id: string, pages: number | null = 1, size = 1_000): AttachmentUpload =>
+  upload({ id, kind: 'pdf', name: `${id}.pdf`, size, pages }, bytes(size, 'application/pdf'));
+
+export const imageFile = (id: string, size = 1_000): AttachmentUpload =>
+  upload(
+    { id, kind: 'image', name: `${id}.png`, size, mediaType: 'image/png', width: 100, height: 50 },
+    bytes(size, 'image/png'),
+  );
+
+export const filePart = ({ attachment }: AttachmentUpload): Part => ({ type: 'file', attachment });
+
+/** Um envio de texto para `c1`; o teste muda só o que importa a ele. */
+export const sendInput = (
+  overrides: Partial<Omit<SendOptions, 'signal'>> = {},
+): Omit<SendOptions, 'signal'> => ({
+  conversationId: 'c1',
+  text: 'Pergunta',
+  attachments: [],
+  model: testModel,
+  effort: 'low',
+  ...overrides,
+});
+
 export const makeConversation = (
   id: string,
   overrides: Partial<Conversation> = {},
@@ -97,6 +136,7 @@ export const makeConversation = (
 export class MemoryStore implements ConversationStore {
   readonly conversations = new Map<string, Conversation>();
   readonly messages = new Map<string, Message>();
+  readonly attachments = new Map<string, { conversationId: string; blob: Blob }>();
   readonly #watchers = new Set<() => void>();
 
   #changed(): void {
@@ -146,10 +186,27 @@ export class MemoryStore implements ConversationStore {
     return updated;
   }
 
+  async startTurn(turn: TurnWrite): Promise<Conversation | null> {
+    const current = this.conversations.get(turn.conversationId);
+    if (!current) return null;
+
+    const updated = turn.change(current);
+    this.conversations.set(updated.id, updated);
+    for (const message of turn.messages) this.messages.set(message.id, message);
+    for (const { attachment, blob } of turn.attachments) {
+      this.attachments.set(attachment.id, { conversationId: turn.conversationId, blob });
+    }
+    this.#changed();
+    return updated;
+  }
+
   async deleteConversation(id: string): Promise<void> {
     this.conversations.delete(id);
     for (const [messageId, message] of this.messages) {
       if (message.conversationId === id) this.messages.delete(messageId);
+    }
+    for (const [attachmentId, attachment] of this.attachments) {
+      if (attachment.conversationId === id) this.attachments.delete(attachmentId);
     }
     this.#changed();
   }
@@ -169,6 +226,14 @@ export class MemoryStore implements ConversationStore {
     this.#changed();
   }
 
+  async readAttachments(ids: string[]): Promise<Blob[]> {
+    return ids.map((id) => {
+      const stored = this.attachments.get(id);
+      if (!stored) throw missingAttachmentError();
+      return stored.blob;
+    });
+  }
+
   async listStreamingMessages(): Promise<Message[]> {
     return [...this.messages.values()].filter((message) => message.status === 'streaming');
   }
@@ -176,7 +241,21 @@ export class MemoryStore implements ConversationStore {
   async clearConversations(): Promise<void> {
     this.conversations.clear();
     this.messages.clear();
+    this.attachments.clear();
     this.#changed();
+  }
+
+  async snapshot(): Promise<HistorySnapshot> {
+    const conversations = await this.listConversations();
+    return {
+      conversations: await Promise.all(
+        conversations.map(async (conversation) => ({
+          conversation,
+          messages: await this.listMessages(conversation.id),
+        })),
+      ),
+      attachments: new Map([...this.attachments].map(([id, { blob }]) => [id, blob])),
+    };
   }
 }
 
@@ -368,7 +447,7 @@ export const flowDeps = (store = new MemoryStore()): BuiltDeps => {
       store,
       settings: new MemorySettingsStore(),
       clock,
-      estimator: { estimate: () => 1 },
+      estimator: { estimate: () => 1, estimateAttachment: () => 1 },
       newId: () => `id-${(next += 1)}`,
       flushIntervalMs: 60_000,
       locks: new MemoryLocks(),

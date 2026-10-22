@@ -1,3 +1,4 @@
+import type { Attachment, ImageMediaType } from '../../domain/attachment';
 import type { Conversation } from '../../domain/conversation';
 import type { AppErrorCode } from '../../domain/error';
 import type { ProviderId } from '../../domain/ids';
@@ -20,9 +21,30 @@ export interface ConversationRecord {
   updatedAt: number;
 }
 
+export type AttachmentRecord =
+  | {
+      id: string;
+      kind: 'image';
+      name: string;
+      size: number;
+      mediaType: ImageMediaType;
+      width: number;
+      height: number;
+    }
+  | { id: string; kind: 'pdf'; name: string; size: number; pages: number | null }
+  | { id: string; kind: 'text'; name: string; size: number };
+
 export type PartRecord =
   | { type: 'text'; text: string }
-  | { type: 'reasoning'; text: string; signature: string };
+  | { type: 'reasoning'; text: string; signature: string }
+  | { type: 'file'; attachment: AttachmentRecord };
+
+/** Os bytes de um Anexo, fora da Mensagem; `conversationId` serve à cascata. */
+export interface AttachmentBytesRecord {
+  id: string;
+  conversationId: string;
+  blob: Blob;
+}
 
 export interface MessageRecord {
   id: string;
@@ -72,12 +94,54 @@ export const fromConversationRecord = (record: ConversationRecord): Conversation
   updatedAt: record.updatedAt,
 });
 
+const toAttachmentRecord = (attachment: Attachment): AttachmentRecord => {
+  const { id, name, size } = attachment;
+  switch (attachment.kind) {
+    case 'image':
+      return {
+        id,
+        kind: 'image',
+        name,
+        size,
+        mediaType: attachment.mediaType,
+        width: attachment.width,
+        height: attachment.height,
+      };
+    case 'pdf':
+      return { id, kind: 'pdf', name, size, pages: attachment.pages };
+    case 'text':
+      return { id, kind: 'text', name, size };
+  }
+};
+
+const fromAttachmentRecord = (record: AttachmentRecord): Attachment => {
+  const { id, name, size } = record;
+  switch (record.kind) {
+    case 'image':
+      return {
+        id,
+        kind: 'image',
+        name,
+        size,
+        mediaType: record.mediaType,
+        width: record.width,
+        height: record.height,
+      };
+    case 'pdf':
+      return { id, kind: 'pdf', name, size, pages: record.pages };
+    case 'text':
+      return { id, kind: 'text', name, size };
+  }
+};
+
 const toPartRecord = (part: Part): PartRecord => {
   switch (part.type) {
     case 'text':
       return { type: 'text', text: part.text };
     case 'reasoning':
       return { type: 'reasoning', text: part.text, signature: part.signature };
+    case 'file':
+      return { type: 'file', attachment: toAttachmentRecord(part.attachment) };
   }
 };
 
@@ -87,6 +151,8 @@ const fromPartRecord = (record: PartRecord): Part => {
       return { type: 'text', text: record.text };
     case 'reasoning':
       return { type: 'reasoning', text: record.text, signature: record.signature };
+    case 'file':
+      return { type: 'file', attachment: fromAttachmentRecord(record.attachment) };
   }
 };
 

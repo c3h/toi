@@ -1,5 +1,5 @@
 import Dexie, { type Table } from 'dexie';
-import type { ConversationRecord, MessageRecord } from './records';
+import type { AttachmentBytesRecord, ConversationRecord, MessageRecord } from './records';
 
 interface SettingRow {
   key: string;
@@ -14,6 +14,7 @@ interface CredentialRow {
 export class ToiDatabase extends Dexie {
   conversations!: Table<ConversationRecord, string>;
   messages!: Table<MessageRecord, string>;
+  attachments!: Table<AttachmentBytesRecord, string>;
   settings!: Table<SettingRow, string>;
   credentials!: Table<CredentialRow, string>;
 
@@ -24,6 +25,7 @@ export class ToiDatabase extends Dexie {
     this.version(1).stores({
       conversations: 'id, updatedAt',
       messages: 'id, conversationId, [conversationId+seq], status',
+      attachments: 'id, conversationId',
       settings: 'key',
       credentials: 'provider',
     });

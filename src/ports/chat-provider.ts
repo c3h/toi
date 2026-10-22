@@ -1,12 +1,21 @@
+import type { Attachment } from '../domain/attachment';
 import type { ProviderId } from '../domain/ids';
-import type { Part } from '../domain/message';
 import type { Effort, Model } from '../domain/model';
 import type { StreamEvent } from '../domain/stream';
 
-/** Carrega Partes, não texto: raciocínio, imagem e ferramentas entram sem mudar a porta. */
+/**
+ * Uma Parte como vai ao Provedor: o Anexo com o Blob do store, que o adapter
+ * lê só ao montar o corpo e traduz no bloco que a API dá a cada tipo.
+ */
+export type OutgoingPart =
+  | { type: 'text'; text: string }
+  | { type: 'reasoning'; text: string; signature: string }
+  | { type: 'file'; attachment: Attachment; data: Blob };
+
+/** Carrega Partes, não texto: raciocínio, Anexos e ferramentas entram sem mudar a porta. */
 export interface ChatMessage {
   role: 'user' | 'assistant';
-  parts: Part[];
+  parts: OutgoingPart[];
 }
 
 export interface ChatRequest {
