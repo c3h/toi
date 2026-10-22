@@ -20,6 +20,7 @@ export const createConversation = async (
   const conversation: Conversation = {
     id: deps.newId(),
     title: 'Nova conversa',
+    titleSource: 'derived',
     ...fieldsOf(model),
     effort,
     createdAt: now,
@@ -41,6 +42,7 @@ export const renameConversation = (
   return deps.store.updateConversation(id, (conversation) => ({
     ...conversation,
     title: clean.slice(0, MAX_TITLE_LENGTH),
+    titleSource: 'manual',
     updatedAt: deps.clock.now(),
   }));
 };
