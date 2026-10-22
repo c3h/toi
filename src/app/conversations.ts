@@ -1,6 +1,6 @@
 import { MAX_TITLE_LENGTH, normalizeTitle, type Conversation } from '../domain/conversation';
 import type { ConversationId } from '../domain/ids';
-import { fieldsOf, type ModelRef } from '../domain/model';
+import { fieldsOf, type Effort, type ModelRef } from '../domain/model';
 import type { Clock } from '../ports/clock';
 import type { ConversationStore } from '../ports/conversation-store';
 
@@ -13,6 +13,7 @@ export interface ConversationDeps {
 export const createConversation = async (
   deps: ConversationDeps,
   model: ModelRef,
+  effort: Effort,
 ): Promise<Conversation> => {
   const now = deps.clock.now();
 
@@ -20,6 +21,7 @@ export const createConversation = async (
     id: deps.newId(),
     title: 'Nova conversa',
     ...fieldsOf(model),
+    effort,
     createdAt: now,
     updatedAt: now,
   };
@@ -53,6 +55,14 @@ export const changeModel = (
     ...conversation,
     ...fieldsOf(model),
   }));
+
+/** Como `changeModel`: muda a Conversa atual sem tocar em `updatedAt`. */
+export const changeEffort = (
+  deps: ConversationDeps,
+  id: ConversationId,
+  effort: Effort,
+): Promise<Conversation | null> =>
+  deps.store.updateConversation(id, (conversation) => ({ ...conversation, effort }));
 
 export const deleteConversation = async (
   deps: ConversationDeps,

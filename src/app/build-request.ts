@@ -1,4 +1,4 @@
-import type { Model } from '../domain/model';
+import type { Effort, Model } from '../domain/model';
 import type { Message, Part } from '../domain/message';
 import type { ChatMessage, ChatRequest } from '../ports/chat-provider';
 import type { TokenEstimator } from '../ports/token-estimator';
@@ -10,6 +10,7 @@ const CONTEXT_BUDGET = 0.8;
 export interface BuildRequestInput {
   messages: Message[];
   model: Model;
+  effort: Effort;
   estimator: TokenEstimator;
 }
 
@@ -68,7 +69,12 @@ const costOf = (messages: ChatMessage[], estimator: TokenEstimator): number =>
     0,
   );
 
-export const buildRequest = ({ messages, model, estimator }: BuildRequestInput): BuiltRequest => {
+export const buildRequest = ({
+  messages,
+  model,
+  effort,
+  estimator,
+}: BuildRequestInput): BuiltRequest => {
   const candidates: ChatMessage[] = messages
     .filter((message) => message.status !== 'streaming')
     .map((message): ChatMessage => ({ role: message.role, parts: outgoingParts(message) }))
@@ -113,6 +119,7 @@ export const buildRequest = ({ messages, model, estimator }: BuildRequestInput):
     request: {
       model: model.id,
       maxTokens,
+      effort,
       messages: selected,
     },
     truncated,

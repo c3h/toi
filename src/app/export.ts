@@ -2,6 +2,7 @@ import type { Conversation } from '../domain/conversation';
 import type { AppErrorCode } from '../domain/error';
 import type { ProviderId } from '../domain/ids';
 import type { Message, Part } from '../domain/message';
+import type { Effort } from '../domain/model';
 import type { StopReason } from '../domain/usage';
 import type { Clock } from '../ports/clock';
 import type { ConversationStore } from '../ports/conversation-store';
@@ -10,7 +11,7 @@ import type { ConversationStore } from '../ports/conversation-store';
  * Formato do arquivo de exportação. É contrato com arquivos que já saíram do
  * app: a estrutura é escrita à mão, não derivada do domínio, para que mudar
  * o domínio quebre o mapeamento aqui em vez de mudar o arquivo em silêncio.
- * Enumerações (`StopReason`, `AppErrorCode`) vêm do domínio: acrescentar um
+ * Enumerações (`StopReason`, `AppErrorCode`, `Effort`) vêm do domínio: acrescentar um
  * valor é compatível. Mudança incompatível sobe `version`.
  */
 export const HISTORY_EXPORT_FORMAT = 'toi.history';
@@ -31,6 +32,7 @@ export interface ExportedMessage {
   firstTokenAt: number | null;
   provider: ProviderId | null;
   model: string | null;
+  effort: Effort | null;
   usage: {
     inputTokens: number;
     outputTokens: number;
@@ -51,6 +53,7 @@ export interface ExportedConversation {
   title: string;
   provider: ProviderId;
   model: string;
+  effort: Effort;
   createdAt: number;
   updatedAt: number;
   messages: ExportedMessage[];
@@ -89,6 +92,7 @@ const exportMessage = (message: Message): ExportedMessage => ({
   firstTokenAt: message.firstTokenAt,
   provider: message.provider,
   model: message.model,
+  effort: message.effort,
   usage: message.usage && {
     inputTokens: message.usage.inputTokens,
     outputTokens: message.usage.outputTokens,
@@ -112,6 +116,7 @@ const exportConversation = (
   title: conversation.title,
   provider: conversation.provider,
   model: conversation.model,
+  effort: conversation.effort,
   createdAt: conversation.createdAt,
   updatedAt: conversation.updatedAt,
   messages: messages.map(exportMessage),

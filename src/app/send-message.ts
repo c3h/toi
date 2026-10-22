@@ -14,10 +14,11 @@ import {
   type Message,
   type MessageStatus,
 } from '../domain/message';
-import { fieldsOf, type Model, type ModelRef } from '../domain/model';
+import { fieldsOf, refOf, type Effort, type Model, type ModelRef } from '../domain/model';
 import type { ChatProvider } from '../ports/chat-provider';
 import type { Clock } from '../ports/clock';
 import type { ConversationStore } from '../ports/conversation-store';
+import type { SettingsStore } from '../ports/settings-store';
 import type { TokenEstimator } from '../ports/token-estimator';
 import { buildRequest } from './build-request';
 import { createFlusher, type Flusher } from './flusher';
@@ -26,6 +27,8 @@ const DEFAULT_FLUSH_INTERVAL_MS = 300;
 
 export interface RunDeps {
   store: ConversationStore;
+  /** Só para lembrar o Modelo e o Esforço do envio como default de uma Conversa nova. */
+  settings: Pick<SettingsStore, 'saveLastModel' | 'saveLastEffort'>;
   provider: ChatProvider;
   clock: Clock;
   estimator: TokenEstimator;
@@ -38,6 +41,7 @@ export interface SendOptions {
   conversationId: ConversationId;
   text: string;
   model: Model;
+  effort: Effort;
   signal: AbortSignal;
 }
 
@@ -45,6 +49,7 @@ export interface RetryOptions {
   conversationId: ConversationId;
   messageId: MessageId;
   model: Model;
+  effort: Effort;
   signal: AbortSignal;
 }
 
@@ -68,6 +73,7 @@ const nextSeq = (messages: Message[]): number => (messages.at(-1)?.seq ?? 0) + 1
 const streamingAssistant = (
   { id, conversationId, seq }: Pick<Message, 'id' | 'conversationId' | 'seq'>,
   model: ModelRef,
+  effort: Effort,
   now: number,
 ): Message => ({
   id,
@@ -80,6 +86,7 @@ const streamingAssistant = (
   completedAt: null,
   firstTokenAt: null,
   ...fieldsOf(model),
+  effort,
   usage: null,
   stopReason: null,
   error: null,
@@ -90,12 +97,13 @@ interface AssistantRun {
   history: Message[];
   assistant: Message;
   model: Model;
+  effort: Effort;
   signal: AbortSignal;
 }
 
 const runAssistant = async (
   deps: RunDeps,
-  { conversationId, history, assistant, model, signal }: AssistantRun,
+  { conversationId, history, assistant, model, effort, signal }: AssistantRun,
   flusher: Flusher<Message>,
 ): Promise<RunResult> => {
   let draft = assistant;
@@ -114,6 +122,7 @@ const runAssistant = async (
     const built = buildRequest({
       messages: history,
       model,
+      effort,
       estimator: deps.estimator,
     });
 
@@ -169,7 +178,7 @@ const runAssistant = async (
 
   if (status === 'complete') {
     try {
-      // Só `updatedAt`: Modelo e Título podem ter mudado enquanto a resposta chegava.
+      // Só `updatedAt`: Modelo, Esforço e Título podem ter mudado enquanto a resposta chegava.
       const now = deps.clock.now();
       await deps.store.updateConversation(conversationId, (current) => ({
         ...current,
@@ -208,21 +217,37 @@ const loadConversation = async (
   return { conversation, messages };
 };
 
-/** Aponta a Conversa para o Modelo do envio sobre o que está gravado, sem desfazer outra aba. */
+/** Aponta a Conversa para o Modelo e o Esforço do envio sobre o gravado, sem desfazer outra aba. */
 const aimConversation = async (
   store: ConversationStore,
   id: ConversationId,
   model: ModelRef,
+  effort: Effort,
   now: number,
   title?: string,
 ): Promise<void> => {
   const updated = await store.updateConversation(id, (current) => ({
     ...current,
     ...fieldsOf(model),
+    effort,
     title: title ?? current.title,
     updatedAt: now,
   }));
   if (!updated) throw new Error(`Conversa ${id} não encontrada.`);
+};
+
+/**
+ * O Modelo e o Esforço do envio viram o default de uma Conversa nova. É
+ * conveniência: falhar ao gravá-los não impede o envio.
+ */
+const rememberChoice = async (
+  settings: RunDeps['settings'],
+  model: ModelRef,
+  effort: Effort,
+): Promise<void> => {
+  await Promise.all([settings.saveLastModel(model), settings.saveLastEffort(effort)]).catch(
+    () => undefined,
+  );
 };
 
 export const startSendMessage = async (
@@ -248,6 +273,7 @@ export const startSendMessage = async (
     firstTokenAt: null,
     provider: null,
     model: null,
+    effort: null,
     usage: null,
     stopReason: null,
     error: null,
@@ -256,6 +282,7 @@ export const startSendMessage = async (
   const assistant = streamingAssistant(
     { id: deps.newId(), conversationId: conversation.id, seq: seq + 1 },
     options.model,
+    options.effort,
     now,
   );
 
@@ -263,10 +290,14 @@ export const startSendMessage = async (
     deps.store,
     conversation.id,
     options.model,
+    options.effort,
     now,
     messages.length === 0 ? titleFrom(text) : undefined,
   );
-  await deps.store.putMessage(user);
+  await Promise.all([
+    rememberChoice(deps.settings, refOf(options.model), options.effort),
+    deps.store.putMessage(user),
+  ]);
   await deps.store.putMessage(assistant);
   deps.onUpdate?.(user);
   deps.onUpdate?.(assistant);
@@ -276,6 +307,7 @@ export const startSendMessage = async (
     history: [...messages, user],
     assistant,
     model: options.model,
+    effort: options.effort,
     signal: options.signal,
   });
 };
@@ -301,10 +333,13 @@ export const startRetryMessage = async (
 
   const now = deps.clock.now();
   // A tentativa é do destino atual desde a primeira gravação, mesmo se falhar antes de `started`.
-  const assistant = streamingAssistant(target, options.model, now);
+  const assistant = streamingAssistant(target, options.model, options.effort, now);
 
-  await aimConversation(deps.store, conversation.id, options.model, now);
-  await deps.store.putMessage(assistant);
+  await aimConversation(deps.store, conversation.id, options.model, options.effort, now);
+  await Promise.all([
+    rememberChoice(deps.settings, refOf(options.model), options.effort),
+    deps.store.putMessage(assistant),
+  ]);
   deps.onUpdate?.(assistant);
 
   return startAssistantRun(deps, {
@@ -312,6 +347,7 @@ export const startRetryMessage = async (
     history: messages.filter((message) => message.id !== target.id),
     assistant,
     model: options.model,
+    effort: options.effort,
     signal: options.signal,
   });
 };

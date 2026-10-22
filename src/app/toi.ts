@@ -2,11 +2,12 @@ import type { Conversation } from '../domain/conversation';
 import { appError } from '../domain/error';
 import type { ConversationId, ProviderId } from '../domain/ids';
 import type { Message } from '../domain/message';
-import type { Model, ModelPicks, ModelRef } from '../domain/model';
+import type { Effort, Model, ModelPicks, ModelRef } from '../domain/model';
 import type { ChatProvider, ProviderAdapter, ProviderInfo } from '../ports/chat-provider';
 import type { CredentialStore } from '../ports/credential-store';
 import type { SettingsStore } from '../ports/settings-store';
 import {
+  changeEffort,
   changeModel,
   createConversation,
   deleteConversation,
@@ -49,6 +50,8 @@ export interface Toi {
   refreshModels(signal?: AbortSignal): Promise<Model[]>;
   /** Default de uma Conversa nova. */
   lastModel(): Promise<ModelRef | null>;
+  /** Default de uma Conversa nova; `null` até a pessoa escolher um. */
+  lastEffort(): Promise<Effort | null>;
   /** O que o seletor oferece; `defaultModelPicks` até a pessoa mexer na lista. */
   modelPicks(): Promise<ModelPicks>;
   /** As famílias que cada Provedor registrado sugere. */
@@ -56,13 +59,15 @@ export interface Toi {
   saveModelPicks(picks: ModelPicks): Promise<void>;
   /** Troca o Modelo da Conversa e passa a ser o default das próximas. */
   changeModel(id: ConversationId, model: ModelRef): Promise<Conversation | null>;
+  /** Troca o Esforço da Conversa e passa a ser o default das próximas. */
+  changeEffort(id: ConversationId, effort: Effort): Promise<Conversation | null>;
   listConversations(): Promise<Conversation[]>;
   /** Histórico gravado, também por outra aba; ver `ConversationStore`. */
   watchConversations(listener: (conversations: Conversation[]) => void): () => void;
   watchMessages(conversationId: ConversationId, listener: (messages: Message[]) => void): () => void;
   listMessages(conversationId: ConversationId): Promise<Message[]>;
-  /** O Modelo escolhido vira o default das próximas. */
-  createConversation(model: ModelRef): Promise<Conversation>;
+  /** O envio que a segue grava Modelo e Esforço como default das próximas. */
+  createConversation(model: ModelRef, effort: Effort): Promise<Conversation>;
   renameConversation(id: ConversationId, title: string): Promise<Conversation | null>;
   deleteConversation(id: ConversationId): Promise<void>;
   /** Valida e grava a Chave; devolve os Modelos de todos os Provedores conectados. */
@@ -157,6 +162,7 @@ export const createToi = async (deps: ToiDeps): Promise<Toi> => {
     },
 
     lastModel: () => deps.settings.lastModel(),
+    lastEffort: () => deps.settings.lastEffort(),
 
     async modelPicks() {
       return (await deps.settings.modelPicks()) ?? defaultPicks;
@@ -174,17 +180,19 @@ export const createToi = async (deps: ToiDeps): Promise<Toi> => {
       return updated;
     },
 
+    async changeEffort(id, effort) {
+      const [updated] = await Promise.all([
+        changeEffort(deps, id, effort),
+        deps.settings.saveLastEffort(effort),
+      ]);
+      return updated;
+    },
+
     listConversations: () => deps.store.listConversations(),
     watchConversations: (listener) => deps.store.watchConversations(listener),
     watchMessages: (conversationId, listener) => deps.store.watchMessages(conversationId, listener),
     listMessages: (conversationId) => deps.store.listMessages(conversationId),
-    async createConversation(model) {
-      const [conversation] = await Promise.all([
-        createConversation(deps, model),
-        deps.settings.saveLastModel(model),
-      ]);
-      return conversation;
-    },
+    createConversation: (model, effort) => createConversation(deps, model, effort),
     renameConversation: (id, title) => renameConversation(deps, id, title),
 
     deleteConversation: (id) => guarded(() => deleteConversation(deps, id), id),
