@@ -241,6 +241,7 @@ Toda Mensagem reenvia o histórico, com os Anexos. `build-request` estima tokens
 
 - A Chave fica no IndexedDB, nunca em URL, log, mensagem de erro ou exportação.
 - CSP de produção em `public/_headers` (Cloudflare Workers Static Assets e equivalentes): `default-src` e `script-src` em `'self'`, `connect-src` só `'self'` e `https://api.anthropic.com`, `object-src`, `base-uri`, `frame-ancestors` e `form-action` em `'none'`. O header é a fonte da verdade. Se o host não permitir headers, o fallback `<meta http-equiv="Content-Security-Policy">` ignora `frame-ancestors`, `base-uri` e `form-action` — nesse caso o host está errado para este produto.
+- HSTS em `public/_headers` (`max-age` de um ano, `includeSubDomains`): sem ele, o primeiro pedido por `http://` pode ser interceptado e servir uma página falsa que pede a Chave. Protege a partir da segunda visita; preload exigiria o header no domínio raiz.
 
 - UI: sem `dangerouslySetInnerHTML`; Markdown sem `rehype-raw`; links externos com `rel="noopener noreferrer"` e `target="_blank"`.
 - Sem script, fonte ou analytics de terceiro. Ícones (lucide) e fontes (Geist Mono e Lora via `@fontsource-variable`) vão no bundle. O único script fora do bundle é `public/theme.js`, servido pela própria origem.
