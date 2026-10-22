@@ -1,7 +1,16 @@
 import { useEffect, useRef, useState, type ReactNode, type Ref } from 'react';
 import type { ProviderInfo, ServiceInfo, Toi } from '../app/toi';
 import type { AppErrorInfo } from '../domain/error';
-import { modelFamilies, togglePick, type Model, type ModelPicks } from '../domain/model';
+import {
+  findModel,
+  modelFamilies,
+  refOf,
+  titleModelOf,
+  togglePick,
+  type Model,
+  type ModelPicks,
+  type ModelRef,
+} from '../domain/model';
 import { DEFAULT_TOOL_SPACE, TOOL_SPACES, type ToolSpace } from '../domain/web';
 import { download, errorInfo, linkClass, lower, requestPersistence } from './support';
 import { readTheme, saveTheme, type ThemePref } from './theme';
@@ -241,6 +250,104 @@ const ToolSpaceChoice = ({ toi }: { toi: Toi }) => {
         escreve entre elas. com mais espaço ele pode pesquisar mais a fundo, mas vai menos da
         conversa antiga junto. vale a partir do próximo envio.
       </p>
+      {error && (
+        <p role="alert" className="text-danger">
+          {lower(error.message)}
+        </p>
+      )}
+    </div>
+  );
+};
+
+const keyOf = (model: ModelRef): string => `${model.provider}:${model.id}`;
+
+/**
+ * O Modelo que nomeia as Conversas, entre os do seletor. Gravar é otimista e
+ * volta à escolha anterior se falhar.
+ */
+const TitleModelChoice = ({
+  toi,
+  provider,
+  picked,
+}: {
+  toi: Toi;
+  provider: ProviderInfo;
+  picked: Model[];
+}) => {
+  // `undefined` enquanto a escolha gravada não chegou; `null` é a pessoa sem escolha.
+  const [saved, setSaved] = useState<ModelRef | null | undefined>(undefined);
+  const [error, setError] = useState<AppErrorInfo | null>(null);
+
+  useEffect(() => {
+    let live = true;
+    toi.titleModel().then(
+      (ref) => {
+        if (live) setSaved(ref);
+      },
+      (cause) => {
+        if (live) setError(errorInfo(cause));
+      },
+    );
+    return () => {
+      live = false;
+    };
+  }, [toi]);
+
+  const suggested = titleModelOf(picked, null, toi.titleFamilies());
+  const current =
+    saved === undefined ? null : saved === null ? suggested : findModel(picked, saved);
+
+  const choose = async (ref: ModelRef) => {
+    const previous = saved;
+    setSaved(ref);
+    setError(null);
+    try {
+      await toi.saveTitleModel(ref);
+    } catch (cause) {
+      setSaved(previous);
+      setError(errorInfo(cause));
+    }
+  };
+
+  return (
+    <div className="space-y-2">
+      <Choices
+        name="title-model"
+        legend="modelo do título"
+        // Fora do seletor nenhum fica marcado, mas a escolha segue aberta.
+        value={saved === undefined ? null : current === null ? '' : keyOf(current)}
+        onChange={(key) => {
+          const model = picked.find((item) => keyOf(item) === key);
+          if (model) void choose(refOf(model));
+        }}
+        options={picked.map((model) => ({
+          value: keyOf(model),
+          label: (
+            <>
+              {model.displayName.toLowerCase()}
+              {model === suggested && <span className="text-subtle"> · padrão</span>}
+            </>
+          ),
+        }))}
+      />
+      <p className="text-sm text-subtle">
+        quando a primeira resposta termina, o modelo lê a sua mensagem e o começo da resposta e dá
+        um nome curto à conversa, sem raciocinar. até lá, ou se não der, fica o começo da mensagem.
+        a lista é a do seletor.
+      </p>
+      {current !== null && !current.reasoningOff && (
+        <p className="text-sm text-text">
+          este modelo sempre raciocina; nomeia com o esforço mínimo.
+        </p>
+      )}
+      {saved !== undefined && current === null && (
+        <p className="text-sm text-danger">
+          {saved === null
+            ? `nenhum ${provider.titleFamily} no seletor`
+            : 'o modelo escolhido saiu do seletor'}
+          ; escolha outro ou as conversas novas ficam com o começo da mensagem.
+        </p>
+      )}
       {error && (
         <p role="alert" className="text-danger">
           {lower(error.message)}
@@ -587,6 +694,10 @@ export default function Settings({
           <Action disabled={models.refreshing} onClick={onRefreshModels}>
             {models.refreshing ? 'atualizando…' : 'atualizar lista'}
           </Action>
+        </Section>
+
+        <Section title="título das conversas">
+          <TitleModelChoice toi={toi} provider={provider} picked={picked} />
         </Section>
 
         <Section ref={searchSection} title="busca na web">
