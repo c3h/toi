@@ -28,6 +28,7 @@ export interface ExportedMessage {
   status: 'complete' | 'interrupted' | 'failed';
   createdAt: number;
   completedAt: number | null;
+  firstTokenAt: number | null;
   provider: ProviderId | null;
   model: string | null;
   usage: {
@@ -85,6 +86,7 @@ const exportMessage = (message: Message): ExportedMessage => ({
   status: message.status === 'streaming' ? 'interrupted' : message.status,
   createdAt: message.createdAt,
   completedAt: message.completedAt,
+  firstTokenAt: message.firstTokenAt,
   provider: message.provider,
   model: message.model,
   usage: message.usage && {

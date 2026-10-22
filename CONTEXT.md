@@ -36,11 +36,7 @@ _Avoid_: Chunk, packet
 
 **Lock da Conversa**:
 O direito exclusivo de uma aba de escrever Mensagens numa Conversa. Some quando a aba fecha; Mensagem `streaming` numa Conversa sem dono autoriza a recuperação a marcá-la como `interrupted`.
-_Avoid_: Lease (é o fallback por tempo), mutex
-
-**Lease do Fluxo**:
-O par `owner` + `heartbeatAt` que uma Mensagem `streaming` carrega para indicar que uma aba ainda está gravando. Só decide a recuperação quando o navegador não oferece Lock da Conversa: lease vencido ou ausente autoriza marcar a Mensagem como `interrupted`.
-_Avoid_: Lock, heartbeat (isolado)
+_Avoid_: mutex
 
 **Provedor**:
 O serviço externo que gera Mensagens, com Chave e lista de Modelos próprias. Hoje, apenas a Anthropic.

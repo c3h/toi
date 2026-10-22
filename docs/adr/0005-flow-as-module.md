@@ -2,13 +2,13 @@
 
 A versão anterior deixava `stop` na UI: o componente guardava o `AbortController`, chamava `abort()` e o `send-message` fechava a Mensagem. O flusher, porém, nascia dentro de `runAssistant` e não tinha interface pública — a UI não conseguia cumprir o flush de `pagehide`/`visibilitychange` prometido em `architecture.md` §4. O mesmo valia para o lease: criação no domínio, renovação no app, expiração inline na recuperação e o default de 15 s no app. Cada peça do Fluxo vivia num lugar, e a UI herdaria `AbortSignal`, `Clock`, `owner` e o ciclo de página.
 
-Decidimos que `Flow` (`app/flow.ts`) é o módulo do Fluxo em voo. Ele é dono do `AbortController`, do `owner` e do flusher, e expõe `send`, `retry`, `stop`, `flush` e `active` (a Conversa em voo ou `null`). `stop()` aborta e espera a Mensagem fechar antes de liberar a próxima execução; `flush()` é o gancho dos eventos de página. `createToi` (`app/toi.ts`) compõe a fachada do app: lê as Chaves, cria cada Provedor registrado via `create(key)` ([ADR 0008](0008-provider-and-protocol.md)), recupera Mensagens órfãs na abertura, mantém um único `Flow` estável que lê, a cada envio, o Provedor do Modelo escolhido, expõe as use cases de histórico e compõe "apagar tudo". A UI depende só de `Toi`/`Flow`.
+Decidimos que `Flow` (`app/flow.ts`) é o módulo do Fluxo em voo. Ele é dono do `AbortController` e do flusher, e expõe `send`, `retry`, `stop`, `flush` e `active` (a Conversa em voo ou `null`). `stop()` aborta e espera a Mensagem fechar antes de liberar a próxima execução; `flush()` é o gancho dos eventos de página. `createToi` (`app/toi.ts`) compõe a fachada do app: lê as Chaves, cria cada Provedor registrado via `create(key)` ([ADR 0008](0008-provider-and-protocol.md)), recupera Mensagens órfãs na abertura, mantém um único `Flow` estável que lê, a cada envio, o Provedor do Modelo escolhido, expõe as use cases de histórico e compõe "apagar tudo". A UI depende só de `Toi`/`Flow`.
 
 ## Considered Options
 
 - **UI dona do `AbortController`** (decisão anterior): menos código no app, mas a UI passa a implementar cancelamento, ciclo de página e flush; o flush nem sequer era alcançável pela interface atual.
 - **Zustand dona do `AbortController`**: mesmo problema, com o estado do Fluxo duplicado entre store e app.
-- **`Flow` como módulo do app** (escolhido): uma interface pequena esconde cancelamento, lease, flush e a regra de um Fluxo por vez; a UI fica com botões e eventos, não com semântica.
+- **`Flow` como módulo do app** (escolhido): uma interface pequena esconde cancelamento, flush e a regra de um Fluxo por vez; a UI fica com botões e eventos, não com semântica.
 
 ## Consequences
 

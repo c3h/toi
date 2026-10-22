@@ -158,7 +158,7 @@ describe('createToi', () => {
   });
 
   it('recupera Mensagem streaming órfã na abertura', async () => {
-    const { store, clock, deps } = await setup();
+    const { store, deps } = await setup();
     await store.putMessage(
       makeMessage({
         id: 'm1',
@@ -166,14 +166,12 @@ describe('createToi', () => {
         seq: 1,
         role: 'assistant',
         status: 'streaming',
-        stream: { owner: 'tab-a', heartbeatAt: clock.now() - 20_000 },
       }),
     );
 
     await createToi(deps);
 
     expect((await store.messages.get('m1'))?.status).toBe('interrupted');
-    expect((await store.messages.get('m1'))?.stream).toBeNull();
   });
 
   it('apagar outra Conversa não interrompe o Fluxo em voo', async () => {
@@ -254,7 +252,7 @@ describe('createToi', () => {
 
     const { provider, delta } = gatedProvider();
     const tabA = await createToi({ ...deps, providers: providersOf(() => provider) });
-    const tabB = await createToi({ ...deps, owner: 'tab-b' });
+    const tabB = await createToi(deps);
 
     const pending = tabA.flow.send({ conversationId: 'c1', text: 'Pergunta', model: testModel });
     await delta;

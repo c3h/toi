@@ -1,7 +1,7 @@
 import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
 import { anthropic } from './adapters/providers/anthropic/provider';
-import { createLocks } from './adapters/locks/web';
+import { WebLocks } from './adapters/locks/web';
 import { DexieConversationStore } from './adapters/storage/conversations';
 import { DexieCredentialStore } from './adapters/storage/credentials';
 import { ToiDatabase } from './adapters/storage/db';
@@ -17,19 +17,6 @@ const element = document.getElementById('root');
 if (!element) throw new Error('Elemento #root não encontrado.');
 const root = createRoot(element);
 
-/** Dono do Lease do Fluxo: um id por aba, estável entre recargas. */
-const tabId = (): string => {
-  try {
-    const saved = sessionStorage.getItem('toi:tab');
-    if (saved) return saved;
-    const id = newId();
-    sessionStorage.setItem('toi:tab', id);
-    return id;
-  } catch {
-    return newId();
-  }
-};
-
 const boot = async (): Promise<void> => {
   const db = new ToiDatabase();
 
@@ -40,8 +27,7 @@ const boot = async (): Promise<void> => {
     clock: systemClock,
     estimator: heuristicTokenEstimator,
     newId,
-    owner: tabId(),
-    locks: createLocks(),
+    locks: new WebLocks(navigator.locks),
     providers: [anthropic],
   });
 

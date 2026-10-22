@@ -182,6 +182,7 @@ export const describeConversationStore = (
           status: 'failed',
           createdAt: 10,
           completedAt: 20,
+          firstTokenAt: 12,
           model: 'claude-test',
           usage: {
             inputTokens: 1,
@@ -191,7 +192,6 @@ export const describeConversationStore = (
           },
           stopReason: 'max_tokens',
           error: { code: 'overloaded', message: 'cheio', detail: 'x', retryAfterSeconds: 5 },
-          stream: { owner: 'tab-a', heartbeatAt: 15 },
         });
 
         await store.putMessage(full);

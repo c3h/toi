@@ -32,6 +32,7 @@ export interface MessageRecord {
   status: MessageStatus;
   createdAt: number;
   completedAt: number | null;
+  firstTokenAt: number | null;
   provider: ProviderId | null;
   model: string | null;
   usage: {
@@ -47,7 +48,6 @@ export interface MessageRecord {
     detail: string | null;
     retryAfterSeconds: number | null;
   } | null;
-  stream: { owner: string; heartbeatAt: number } | null;
 }
 
 export const toConversationRecord = (conversation: Conversation): ConversationRecord => ({
@@ -95,6 +95,7 @@ export const toMessageRecord = (message: Message): MessageRecord => ({
   status: message.status,
   createdAt: message.createdAt,
   completedAt: message.completedAt,
+  firstTokenAt: message.firstTokenAt,
   provider: message.provider,
   model: message.model,
   usage: message.usage && {
@@ -110,7 +111,6 @@ export const toMessageRecord = (message: Message): MessageRecord => ({
     detail: message.error.detail,
     retryAfterSeconds: message.error.retryAfterSeconds,
   },
-  stream: message.stream && { owner: message.stream.owner, heartbeatAt: message.stream.heartbeatAt },
 });
 
 export const fromMessageRecord = (record: MessageRecord): Message => ({
@@ -122,12 +122,12 @@ export const fromMessageRecord = (record: MessageRecord): Message => ({
   status: record.status,
   createdAt: record.createdAt,
   completedAt: record.completedAt,
+  firstTokenAt: record.firstTokenAt,
   provider: record.provider,
   model: record.model,
   usage: record.usage && { ...record.usage },
   stopReason: record.stopReason,
   error: record.error && { ...record.error },
-  stream: record.stream && { ...record.stream },
 });
 
 /** Item do cache de Modelos em `settings`, um cache por Provedor. */

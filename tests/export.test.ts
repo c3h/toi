@@ -3,7 +3,7 @@ import { exportHistory } from '../src/app/export';
 import { fixedClock, makeConversation, makeMessage, MemoryStore } from './helpers';
 
 describe('exportHistory', () => {
-  it('exporta Fluxo em voo como interrupted e sem o Lease', async () => {
+  it('exporta Fluxo em voo como interrupted', async () => {
     const store = new MemoryStore();
     await store.putConversation(makeConversation('c1'));
     await store.putMessage(
@@ -14,7 +14,7 @@ describe('exportHistory', () => {
         role: 'assistant',
         status: 'streaming',
         parts: [{ type: 'text', text: 'parcial' }],
-        stream: { owner: 'tab-a', heartbeatAt: 1 },
+        firstTokenAt: 1_200,
       }),
     );
 
@@ -23,8 +23,8 @@ describe('exportHistory', () => {
 
     expect(exported.conversations[0]).toMatchObject({ provider: 'anthropic' });
     expect(message?.provider).toBe('anthropic');
+    expect(message?.firstTokenAt).toBe(1_200);
     expect(message?.status).toBe('interrupted');
-    expect(message).not.toHaveProperty('stream');
     expect(message?.parts).toEqual([{ type: 'text', text: 'parcial' }]);
   });
 

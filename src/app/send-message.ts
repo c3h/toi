@@ -9,9 +9,8 @@ import {
 } from '../domain/error';
 import type { ConversationId, MessageId } from '../domain/ids';
 import {
-  appendText,
   closeMessage,
-  leaseOf,
+  receiveDelta,
   type Message,
   type MessageStatus,
 } from '../domain/message';
@@ -31,7 +30,6 @@ export interface RunDeps {
   clock: Clock;
   estimator: TokenEstimator;
   newId: () => string;
-  owner: string;
   flushIntervalMs?: number;
   onUpdate?: (message: Message) => void;
 }
@@ -66,6 +64,27 @@ const storageFailed = (cause: unknown): AppErrorInfo =>
 
 const nextSeq = (messages: Message[]): number => (messages.at(-1)?.seq ?? 0) + 1;
 
+/** Resposta nova em Fluxo. Tentar de novo reaproveita só id e posição: o relógio recomeça com ela. */
+const streamingAssistant = (
+  { id, conversationId, seq }: Pick<Message, 'id' | 'conversationId' | 'seq'>,
+  model: ModelRef,
+  now: number,
+): Message => ({
+  id,
+  conversationId,
+  seq,
+  role: 'assistant',
+  parts: [],
+  status: 'streaming',
+  createdAt: now,
+  completedAt: null,
+  firstTokenAt: null,
+  ...fieldsOf(model),
+  usage: null,
+  stopReason: null,
+  error: null,
+});
+
 interface AssistantRun {
   conversationId: ConversationId;
   history: Message[];
@@ -86,11 +105,7 @@ const runAssistant = async (
   let error: AppErrorInfo | null = null;
 
   const apply = (message: Message): void => {
-    draft =
-      message.status === 'streaming'
-        ? { ...message, stream: leaseOf(deps.owner, deps.clock.now()) }
-        : message;
-
+    draft = message;
     deps.onUpdate?.(draft);
     flusher.push(draft);
   };
@@ -110,9 +125,11 @@ const runAssistant = async (
           apply({ ...draft, model: event.model, usage: event.usage });
           break;
 
-        case 'delta':
-          if (event.part === 'text') apply(appendText(draft, event.text));
+        case 'delta': {
+          const next = receiveDelta(draft, event.part, event.text, deps.clock.now());
+          if (next !== draft) apply(next);
           break;
+        }
 
         case 'usage':
           apply({ ...draft, usage: event.usage, stopReason: event.stopReason });
@@ -228,29 +245,19 @@ export const startSendMessage = async (
     status: 'complete',
     createdAt: now,
     completedAt: now,
+    firstTokenAt: null,
     provider: null,
     model: null,
     usage: null,
     stopReason: null,
     error: null,
-    stream: null,
   };
 
-  const assistant: Message = {
-    id: deps.newId(),
-    conversationId: conversation.id,
-    seq: seq + 1,
-    role: 'assistant',
-    parts: [],
-    status: 'streaming',
-    createdAt: now,
-    completedAt: null,
-    ...fieldsOf(options.model),
-    usage: null,
-    stopReason: null,
-    error: null,
-    stream: leaseOf(deps.owner, now),
-  };
+  const assistant = streamingAssistant(
+    { id: deps.newId(), conversationId: conversation.id, seq: seq + 1 },
+    options.model,
+    now,
+  );
 
   await aimConversation(
     deps.store,
@@ -294,17 +301,7 @@ export const startRetryMessage = async (
 
   const now = deps.clock.now();
   // A tentativa é do destino atual desde a primeira gravação, mesmo se falhar antes de `started`.
-  const assistant: Message = {
-    ...target,
-    ...fieldsOf(options.model),
-    parts: [],
-    status: 'streaming',
-    completedAt: null,
-    usage: null,
-    stopReason: null,
-    error: null,
-    stream: leaseOf(deps.owner, now),
-  };
+  const assistant = streamingAssistant(target, options.model, now);
 
   await aimConversation(deps.store, conversation.id, options.model, now);
   await deps.store.putMessage(assistant);

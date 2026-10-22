@@ -1,7 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { userEvent } from 'vitest/browser';
 import { render } from 'vitest-browser-react';
-import { MemoryLocks } from '../../src/adapters/locks/memory';
 import { createToi } from '../../src/app/toi';
 import type { Model } from '../../src/domain/model';
 import type { ChatProvider } from '../../src/ports/chat-provider';
@@ -11,6 +10,7 @@ import {
   gatedProvider,
   makeModel,
   MemoryCredentialStore,
+  MemoryLocks,
   MemorySettingsStore,
   MemoryStore,
   providersOf,
@@ -28,7 +28,6 @@ const mount = async (createProvider: (key: string) => ChatProvider) => {
     clock: { now: () => Date.now() },
     estimator: { estimate: () => 1 },
     newId: () => `id-${(next += 1)}`,
-    owner: 'tab',
     locks: new MemoryLocks(),
     providers: providersOf(createProvider),
   });

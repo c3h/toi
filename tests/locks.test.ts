@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
-import { MemoryLocks } from '../src/adapters/locks/memory';
 import { WebLocks } from '../src/adapters/locks/web';
 import type { Locks } from '../src/ports/locks';
+import { MemoryLocks } from './helpers';
 
 const describeLocks = (name: string, open: () => Locks): void => {
   describe(name, () => {
@@ -45,10 +45,7 @@ let names = 0;
 /** Prefixa os nomes: `navigator.locks` é um só para o processo inteiro. */
 const isolated = (locks: Locks): Locks => {
   const prefix = `test-${(names += 1)}:`;
-  return {
-    crossTab: locks.crossTab,
-    tryAcquire: (name, mode) => locks.tryAcquire(prefix + name, mode),
-  };
+  return { tryAcquire: (name, mode) => locks.tryAcquire(prefix + name, mode) };
 };
 
 describeLocks('MemoryLocks', () => new MemoryLocks());

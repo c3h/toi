@@ -7,12 +7,12 @@ import type { StreamEvent } from '../src/domain/stream';
 import { emptyUsage } from '../src/domain/usage';
 import type { ChatProvider, ChatRequest, ProviderAdapter } from '../src/ports/chat-provider';
 import type { FlowDeps } from '../src/app/flow';
-import { MemoryLocks } from '../src/adapters/locks/memory';
 import { anthropicInfo } from '../src/adapters/providers/anthropic/info';
 import { anthropicFamily } from '../src/adapters/providers/anthropic/models';
 import type { Clock } from '../src/ports/clock';
 import type { ConversationStore } from '../src/ports/conversation-store';
 import type { CredentialStore } from '../src/ports/credential-store';
+import type { LockMode, Locks, Release } from '../src/ports/locks';
 import type { SettingsStore } from '../src/ports/settings-store';
 
 export const testModel: Model = {
@@ -70,12 +70,12 @@ export const makeMessage = (
   status: 'complete',
   createdAt: 1_000,
   completedAt: 1_000,
+  firstTokenAt: null,
   provider: overrides.role === 'assistant' ? 'anthropic' : null,
   model: null,
   usage: null,
   stopReason: null,
   error: null,
-  stream: null,
   ...overrides,
 });
 
@@ -195,6 +195,28 @@ export class MemoryCredentialStore implements CredentialStore {
 
   async clear(): Promise<void> {
     this.keys.clear();
+  }
+}
+
+/** Locks de uma página só; duas instâncias de `Flow` com o mesmo objeto simulam duas abas. */
+export class MemoryLocks implements Locks {
+  readonly #held = new Map<string, { mode: LockMode; count: number }>();
+
+  async tryAcquire(name: string, mode: LockMode = 'exclusive'): Promise<Release | null> {
+    const current = this.#held.get(name);
+    if (current && (mode === 'exclusive' || current.mode === 'exclusive')) return null;
+
+    this.#held.set(name, { mode, count: (current?.count ?? 0) + 1 });
+
+    let released = false;
+    return async () => {
+      if (released) return;
+      released = true;
+
+      const holding = this.#held.get(name);
+      if (!holding || holding.count <= 1) this.#held.delete(name);
+      else holding.count -= 1;
+    };
   }
 }
 
@@ -337,9 +359,8 @@ export const flowDeps = (store = new MemoryStore()): BuiltDeps => {
       clock,
       estimator: { estimate: () => 1 },
       newId: () => `id-${(next += 1)}`,
-      owner: 'tab-a',
       flushIntervalMs: 60_000,
-      locks: new MemoryLocks({ crossTab: true }),
+      locks: new MemoryLocks(),
     },
   };
 };

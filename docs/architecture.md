@@ -17,7 +17,7 @@ Um chat que responde uma pergunta com um Modelo da Anthropic, com Fluxo, cancela
 - coordenar abas: uma Conversa recebe Mensagens de uma aba por vez;
 - exportar o histórico em JSON versionado, sem a Chave;
 - Markdown e código na resposta;
-- tokens de entrada e saída por Mensagem.
+- tokens de entrada e saída, tempo até o texto aparecer e tokens por segundo por Mensagem.
 
 **Fora da v1:** conta, sincronização, compartilhamento, i18n, ferramentas, busca na web, branching e os itens do roadmap (§12).
 
@@ -41,7 +41,7 @@ src/
     protocols/   # um formato de API por pasta; anthropic-messages: request, stream, error, types
     providers/   # um Provedor por pasta; anthropic: info, fetch, models, provider
     storage/     # db, records, conversations, credentials, settings
-    locks/       # web (navigator.locks), memory (fallback)
+    locks/       # web (navigator.locks)
     tokens/      # heuristic
   app/           # flow, toi, locks, connect, conversations, erase, export, send-message, build-request; sem React
   ui/            # React + Tailwind: App, Onboarding, Sidebar, Chat, Prose, Settings (lazy), markdown/ (lazy)
@@ -52,7 +52,7 @@ src/
 
 **Regra de dependência:** `ui → app → ports ← adapters`; todos podem importar `domain`; `domain` não importa ninguém. `app` não importa `adapters` e recebe as implementações por injeção. `main.tsx` é o composition root e injeta as implementações concretas; cada Provedor entra em `Toi` como um `ProviderAdapter` (`info` + `create(key)`) na lista `providers`. Provedor e Protocolo são papéis separados dentro de `adapters` ([ADR 0008](adr/0008-provider-and-protocol.md)).
 
-As portas existem por fronteiras reais: `ChatProvider` isola o HTTP de terceiro e permite um segundo Provedor, e `ProviderInfo` é tudo que a UI sabe dele; o storage permite trocar IndexedDB ou usar memória em teste; `Locks` coordena abas por Web Locks e cai para memória quando o navegador não oferece; `TokenEstimator` permite substituir a heurística pela contagem exata sem tocar no domínio; `SettingsStore` guarda o cache de Modelos, o último Modelo escolhido e quais Modelos o seletor oferece.
+As portas existem por fronteiras reais: `ChatProvider` isola o HTTP de terceiro e permite um segundo Provedor, e `ProviderInfo` é tudo que a UI sabe dele; o storage permite trocar IndexedDB ou usar memória em teste; `Locks` coordena abas por Web Locks; `TokenEstimator` permite substituir a heurística pela contagem exata sem tocar no domínio; `SettingsStore` guarda o cache de Modelos, o último Modelo escolhido e quais Modelos o seletor oferece.
 
 ## 4. Ciclo de uma Mensagem
 
@@ -62,7 +62,7 @@ As portas existem por fronteiras reais: `ChatProvider` isola o HTTP de terceiro 
 2. grava a Mensagem do user (`complete`) e a do assistant (`streaming`);
 3. normaliza o histórico e monta o `ChatRequest` (`build-request`);
 4. consome `provider.stream(request, signal)`;
-5. para cada Evento aplicado, atualiza a Parte, renova o lease e agenda o flush (300 ms);
+5. para cada Evento aplicado, atualiza a Parte e agenda o flush (300 ms);
 6. fecha em `complete`, `interrupted` ou `failed`;
 7. devolve `RunResult` e solta os locks; falha de persistência vai em `persistError`, sem reabrir a Mensagem.
 
@@ -77,7 +77,7 @@ streaming ── finished ──► complete
 - `finished` marca o fim lógico do Fluxo; o consumo termina quando o corpo fecha. A UI troca "parar" por "finalizando…" assim que chega o `stop_reason` (o `message_delta` que precede `finished`); parar ali não mudaria o estado final. O parser usa `try/finally` e chama `reader.cancel()` quando o consumidor para antes do fim; um `break` no `for await` não fecharia a conexão sozinho.
 - **`finished` é terminal:** um erro ou abort depois dele não reabre a Mensagem; o estado final continua `complete`.
 - Se o flush final falhar, a Mensagem continua `complete` em memória e `RunResult.persistError` carrega o erro; a UI avisa que a resposta não foi salva.
-- **Tentar de novo substitui a última Mensagem do assistant** (mesmo id, Partes limpas, estado `streaming`). É a única mutação permitida numa Mensagem. Sem isso, a Conversa acumularia duas respostas para o mesmo pedido.
+- **Tentar de novo substitui a última Mensagem do assistant** (mesmo id, Partes limpas, estado `streaming`, `createdAt` e `firstTokenAt` reiniciados para o ritmo ser da nova tentativa). É a única mutação permitida numa Mensagem. Sem isso, a Conversa acumularia duas respostas para o mesmo pedido.
 - Enquanto há Fluxo, o composer fica desabilitado e só existe "parar". Isso elimina o caso de uma segunda Mensagem do user durante o Fluxo.
 - O construtor de requisição funde Mensagens consecutivas do mesmo papel, descarta Mensagens sem texto e assistant nas pontas, nunca envia uma Mensagem `streaming` e exige que a última seja do user.
 
@@ -87,13 +87,11 @@ Cada Mensagem tem `seq`, um inteiro monotônico por Conversa, atribuído pelo ap
 
 O Título é derivado na primeira Mensagem do user: os primeiros ~60 caracteres, cortados no limite de palavra. Nenhuma chamada extra ao Modelo só para nomear.
 
-### Coordenação entre abas e Lease do Fluxo
+### Coordenação entre abas
 
 Decisão e alternativas no [ADR 0006](adr/0006-web-locks-cross-tab.md). `app/locks.ts` define os nomes e a regra: escrever numa Conversa (enviar, tentar de novo, apagá-la) segura `toi:history` shared + `toi:conversation:<id>` exclusive; apagar Conversas e apagar tudo seguram `toi:history` exclusive. Nada espera: lock ocupado vira `flow_busy`.
 
-Na abertura, `createToi` chama `recoverInterrupted`. Com Web Locks, cada Mensagem `streaming` cuja Conversa tem o lock livre é relida sob os mesmos locks de quem escreve (`toi:history` shared e o lock da Conversa) e vira `interrupted`: o navegador solta o lock quando a página morre, então lock livre prova Fluxo sem dono. Histórico sendo apagado em outra aba também conta como ocupado.
-
-Sem Web Locks, vale o Lease: a Mensagem `streaming` guarda `stream.owner` (id da aba, em `sessionStorage`, fornecido pela UI ao `createToi`) e `stream.heartbeatAt`, renovado a cada Evento aplicado e gravado junto no flush. A recuperação converte quando não há lease ou quando `isLeaseExpired` é verdadeiro (15 s por default, `DEFAULT_LEASE_MS` em `domain/message.ts`). O Lease é gravado sempre, para que o fallback funcione com dados de qualquer aba.
+Na abertura, `createToi` chama `recoverInterrupted`. Cada Mensagem `streaming` cuja Conversa tem o lock livre é relida sob os mesmos locks de quem escreve (`toi:history` shared e o lock da Conversa) e vira `interrupted`: o navegador solta o lock quando a página morre, então lock livre prova Fluxo sem dono. Histórico sendo apagado em outra aba também conta como ocupado.
 
 ### Cancelamento e durabilidade
 
@@ -169,7 +167,7 @@ IndexedDB via Dexie. O schema está em `src/adapters/storage/db.ts`: `conversati
 | Store | Conteúdo | Nunca contém |
 |---|---|---|
 | `conversations` | id, título, Provedor e Modelo, timestamps | Mensagens |
-| `messages` | id, conversationId, seq, papel, partes, estado, Provedor e Modelo, uso, stopReason, erro, lease | Chave |
+| `messages` | id, conversationId, seq, papel, partes, estado, timestamps (incluindo o primeiro token), Provedor e Modelo, uso, stopReason, erro | Chave |
 | `settings` | último Modelo, cache de Modelos por Provedor, Modelos do seletor | Chave |
 | `credentials` | Provedor → Chave | Qualquer dado de Conversa |
 
@@ -189,7 +187,7 @@ IndexedDB via Dexie. O schema está em `src/adapters/storage/db.ts`: `conversati
 
 **Duas abas:** a seleção é independente; a barra lateral e a Conversa aberta observam o store (`watchConversations`/`watchMessages`, `liveQuery` no Dexie), então o que outra aba grava aparece sem recarregar — no ritmo do flush, a cada 300 ms; Mensagens de uma Conversa são escritas por uma aba por vez (§4). Metadados da Conversa, como Título e Modelo, seguem last write wins, e cada mudança é lida e gravada numa só transação (`updateConversation`): o fim de um Fluxo só toca `updatedAt` e não desfaz a troca de Modelo ou o Título que outra aba ou a pessoa mudou enquanto a resposta chegava. Sem merge de texto entre abas.
 
-**Exportação:** `toi.exportHistory()` devolve um retrato do histórico no formato `toi.history` versão 1 (`app/export.ts`); a UI só transforma em arquivo. Lê apenas a porta de Conversas, então a Chave não tem caminho até o arquivo. Mensagem em Fluxo sai como `interrupted` e sem Lease.
+**Exportação:** `toi.exportHistory()` devolve um retrato do histórico no formato `toi.history` versão 1 (`app/export.ts`); a UI só transforma em arquivo. Lê apenas a porta de Conversas, então a Chave não tem caminho até o arquivo. Mensagem em Fluxo sai como `interrupted`.
 
 **Apagar conversas** limpa `conversations` e `messages`; **apagar tudo** também remove Configurações e todas as Chaves, por composição no app ([ADR 0004](adr/0004-indexeddb-separate-credential-store.md)). Duas ações distintas em Configurações, ambas com confirmação explícita na própria linha.
 
@@ -254,21 +252,21 @@ Implementação: `ui/use-messages.ts` junta deltas por frame; `ui/blocks.ts` div
 
 | Fronteira | O que testa | Como |
 |---|---|---|
-| `domain` | título, normalização de texto e expiração do lease | Vitest puro |
+| `domain` | título, normalização de texto e ritmo da resposta | Vitest puro |
 | `adapters/http`, `protocols`, `providers` | parser SSE, mappers e classificação de erros HTTP | streams SSE montados no teste: texto, `ping`, `error`, evento desconhecido, chunk cortado no meio de um caractere Unicode; casos principais de status; `retry-after` em segundos e em data com clock fixo |
 | `adapters/storage` | contrato da porta, schema, cascata e fronteira da Chave | `MemoryStore` + Dexie com `fake-indexeddb` |
 | `app/build-request` | fusão de papéis, descarte de Mensagens vazias, truncamento | Vitest puro |
-| `app/send-message` | enviar, abortar, falhar, retry, `finished` terminal, falha de persistência | Provedor fake + store em memória |
+| `app/send-message` | enviar, abortar, falhar, retry, `finished` terminal, falha de persistência, instante do primeiro token | Provedor fake + store em memória |
 | `app/flow` | um Fluxo por vez, `stop` (também antes do Fluxo começar), `flush`, `exclusive`, sem Provedor, duas abas na mesma Conversa | Provedor fake + store em memória; duas instâncias de `Flow` com os mesmos locks simulam duas abas |
-| `app/recover-interrupted` | com locks: lock livre, lock ocupado, histórico sendo apagado, Mensagem fechada entre listar e travar; sem locks: lease vencido, vivo e ausente | clock fixo + store e locks em memória |
-| `adapters/locks` | exclusive, shared e a soltura assíncrona | `MemoryLocks` e `WebLocks` contra o `navigator.locks` real do Node |
+| `app/recover-interrupted` | lock livre, lock ocupado, histórico sendo apagado, Mensagem fechada entre listar e travar | clock fixo + store e locks em memória |
+| `adapters/locks` | exclusive, shared e a soltura assíncrona | o mesmo contrato contra o `WebLocks` sobre o `navigator.locks` real do Node e contra o `MemoryLocks` dos testes, que o espelha |
 | `app/export` | formato, Fluxo em voo, ordem e ausência da Chave | store em memória |
 | `app/toi`/`connect` | validar antes de gravar, Chave anterior preservada, histórico, recuperar, apagar só a Conversa em voo, recusar envio durante apagar tudo, recusar limpeza com Fluxo em outra aba, exportar | fakes de store, credencial, settings e Provedor; um caso com Web Locks reais |
 | `ui` (puro) | divisão em blocos e a mescla entre store e Fluxo local | Vitest em Node (`tests/ui-pure.test.ts`) |
 | `ui` (componentes) | Markdown seguro (sem HTML cru, links, imagens, `javascript:`), highlight só em bloco fechado, onboarding, enviar, parar com esc, shift+enter, apagar com confirmação | Vitest em modo browser no Chromium (`tests/ui/`), com `createToi` real sobre stores em memória |
 | E2E | enviar, parar e tentar de novo, recarregar no meio do Fluxo, duas abas, exportação sem a Chave, orçamento de long task da §9 | Playwright contra `vite preview` do build (`tests/e2e/`); só `fetch` para a Anthropic é simulado, o resto é o navegador real |
 
-Regras: teste não usa `sleep`; debounce usa fake timers e lease usa clock injetado. Teste de regressão fica vermelho no código anterior. Nada de teste que só confirme wiring.
+Regras: teste não usa `sleep`; debounce usa fake timers e instantes vêm de clock injetado. Teste de regressão fica vermelho no código anterior. Nada de teste que só confirme wiring.
 
 ## 11. Stack
 

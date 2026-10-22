@@ -1,9 +1,7 @@
 import type { LockMode, Locks, Release } from '../../ports/locks';
-import { MemoryLocks } from './memory';
 
 /** `navigator.locks`: o navegador solta o lock quando a página morre. */
 export class WebLocks implements Locks {
-  readonly crossTab = true;
   readonly #api: LockManager;
 
   constructor(api: LockManager) {
@@ -33,9 +31,3 @@ export class WebLocks implements Locks {
     });
   }
 }
-
-/** Web Locks quando o ambiente oferece; senão, coordenação só dentro da aba. */
-export const createLocks = (): Locks =>
-  typeof navigator !== 'undefined' && navigator.locks
-    ? new WebLocks(navigator.locks)
-    : new MemoryLocks();

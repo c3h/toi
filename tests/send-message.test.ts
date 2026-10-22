@@ -105,7 +105,6 @@ describe('sendMessage', () => {
     expect(result.message.status).toBe('interrupted');
     expect(textOf(result.message)).toBe('parcial');
     expect(result.message.error).toBeNull();
-    expect(result.message.stream).toBeNull();
   });
 
   it('marca failed com AppError tipado', async () => {
@@ -123,7 +122,6 @@ describe('sendMessage', () => {
 
     expect(result.message.status).toBe('failed');
     expect(result.message.error?.code).toBe('overloaded');
-    expect(result.message.stream).toBeNull();
   });
 
   it('não reabre uma Mensagem finalizada quando o corpo falha depois de finished', async () => {
@@ -174,34 +172,58 @@ describe('sendMessage', () => {
     expect(result.persistError?.code).toBe('storage_failed');
   });
 
-  it('renova o heartbeat do lease a cada Evento do Fluxo', async () => {
-    const { deps, clock } = await baseDeps();
-    const heartbeats: number[] = [];
+  it('marca o primeiro token no primeiro delta de qualquer Parte e não o move depois', async () => {
+    const { store, deps, clock } = await baseDeps();
 
     const provider = new ScriptedProvider(async function* (): AsyncGenerator<StreamEvent> {
       yield { type: 'started', model: testModel.id, usage: usage(3, 0) };
-      yield { type: 'delta', index: 0, part: 'text', text: 'a' };
-      clock.set(60_000);
-      yield { type: 'delta', index: 0, part: 'text', text: 'b' };
+      clock.set(50_800);
+      yield { type: 'delta', index: 0, part: 'reasoning', text: 'pensando' };
+      clock.set(51_000);
+      yield { type: 'delta', index: 1, part: 'text', text: 'oi' };
+      yield { type: 'usage', usage: usage(3, 4), stopReason: 'end_turn' };
       yield { type: 'finished' };
+      clock.set(52_000);
     });
 
-    await sendMessage(
-      {
-        ...deps,
-        provider,
-        onUpdate: (message) => {
-          if (message.status === 'streaming' && message.stream) {
-            heartbeats.push(message.stream.heartbeatAt);
-          }
-        },
-      },
+    const result = await sendMessage(
+      { ...deps, provider },
       { conversationId: 'c1', text: 'Pergunta', model: testModel, signal: new AbortController().signal },
     );
 
-    expect(heartbeats).toContain(50_000);
-    expect(heartbeats).toContain(60_000);
-    expect(heartbeats[heartbeats.length - 1]).toBe(60_000);
+    expect(result.message).toMatchObject({
+      createdAt: 50_000,
+      firstTokenAt: 50_800,
+      completedAt: 52_000,
+    });
+    expect((await store.getMessage(result.message.id))?.firstTokenAt).toBe(50_800);
+  });
+
+  it('retry recomeça o relógio da tentativa', async () => {
+    const { deps, clock } = await baseDeps();
+    const first = await sendMessage(
+      { ...deps, provider: new ScriptedProvider(successEvents()) },
+      { conversationId: 'c1', text: 'Pergunta', model: testModel, signal: new AbortController().signal },
+    );
+
+    clock.set(90_000);
+    const provider = new ScriptedProvider(async function* (): AsyncGenerator<StreamEvent> {
+      clock.set(90_500);
+      yield* successEvents();
+    });
+
+    const retried = await retryMessage(
+      { ...deps, provider },
+      {
+        conversationId: 'c1',
+        messageId: first.message.id,
+        model: testModel,
+        signal: new AbortController().signal,
+      },
+    );
+
+    expect(first.message).toMatchObject({ createdAt: 50_000, firstTokenAt: 50_000 });
+    expect(retried.message).toMatchObject({ createdAt: 90_000, firstTokenAt: 90_500 });
   });
 
   it('retry substitui a última Mensagem do assistant em vez de duplicar', async () => {
@@ -270,10 +292,12 @@ describe('sendMessage', () => {
       },
     );
 
+    expect(first.message.firstTokenAt).not.toBeNull();
     expect(retried.message).toMatchObject({
       status: 'failed',
       provider: 'anthropic',
       model: 'claude-outro',
+      firstTokenAt: null,
     });
     expect(await store.getMessage(first.message.id)).toMatchObject({ model: 'claude-outro' });
     expect(await store.getConversation('c1')).toMatchObject({

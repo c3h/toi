@@ -170,7 +170,7 @@ describe('createFlow', () => {
     const { deps } = await baseDeps();
     const { provider, delta } = gatedProvider();
     const tabA = createFlow({ ...deps, provider: () => provider });
-    const tabB = createFlow({ ...deps, owner: 'tab-b', provider: () => provider });
+    const tabB = createFlow({ ...deps, provider: () => provider });
 
     const pending = tabA.send({ conversationId: 'c1', text: 'Pergunta', model: testModel });
     await delta;
@@ -187,11 +187,7 @@ describe('createFlow', () => {
   it('libera a Conversa para outra aba quando o Fluxo fecha', async () => {
     const { store, deps } = await baseDeps();
     const tabA = createFlow({ ...deps, provider: () => new ScriptedProvider(replyEvents()) });
-    const tabB = createFlow({
-      ...deps,
-      owner: 'tab-b',
-      provider: () => new ScriptedProvider(replyEvents()),
-    });
+    const tabB = createFlow({ ...deps, provider: () => new ScriptedProvider(replyEvents()) });
 
     await tabA.send({ conversationId: 'c1', text: 'Primeira', model: testModel });
     const second = await tabB.send({ conversationId: 'c1', text: 'Segunda', model: testModel });
