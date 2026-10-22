@@ -190,6 +190,25 @@ describe('App', () => {
       .toBeVisible();
   });
 
+  it('começa no menor Esforço, envia o escolhido e a Conversa nova herda o do último envio', async () => {
+    const provider = new ScriptedProvider(replyEvents());
+    const screen = await mount(() => provider);
+    await connect(screen);
+
+    await expect.element(screen.getByRole('button', { name: 'esforço: baixo' })).toBeVisible();
+    await userEvent.click(screen.getByRole('button', { name: /^esforço:/ }));
+    await userEvent.click(screen.getByRole('menuitemradio', { name: 'muito alto' }));
+
+    await userEvent.fill(screen.getByLabelText('mensagem'), 'Pergunta');
+    await userEvent.keyboard('{Enter}');
+
+    await expect.element(screen.getByTitle('esforço muito alto')).toBeVisible();
+    expect(provider.requests[0]?.effort).toBe('xhigh');
+
+    await userEvent.click(screen.getByRole('button', { name: 'nova conversa' }));
+    await expect.element(screen.getByRole('button', { name: 'esforço: muito alto' })).toBeVisible();
+  });
+
   it('sem nenhum Modelo marcado para a Chave, diz isso e leva à escolha', async () => {
     const opus = makeModel('claude-opus-5-5', { displayName: 'Claude Opus 5.5' });
     const screen = await mount(() => new ScriptedProvider(replyEvents(), [opus]));
