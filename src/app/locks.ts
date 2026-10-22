@@ -3,7 +3,7 @@ import type { ConversationId } from '../domain/ids';
 import type { LockMode, Locks, Release } from '../ports/locks';
 
 /** Shared para quem escreve numa Conversa; exclusive para apagar o histórico. */
-export const HISTORY_LOCK = 'toi:history';
+const HISTORY_LOCK = 'toi:history';
 
 /** Exclusive para quem escreve Mensagens na Conversa: um Fluxo por Conversa entre abas. */
 export const conversationLock = (id: ConversationId): string => `toi:conversation:${id}`;
