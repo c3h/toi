@@ -111,7 +111,7 @@ export const revealedText = (track: RevealTrack): string =>
   revealedPrefix(track.text, track.state.shown);
 
 /** Se há animação em curso, para o fechamento drenar em vez de saltar. */
-export const isAnimating = (track: RevealTrack): boolean =>
+const isAnimating = (track: RevealTrack): boolean =>
   track.mode === 'live' ||
   (track.mode === 'drain' && !isRevealSettled(track.state, track.text.length));
 
