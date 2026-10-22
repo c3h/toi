@@ -1,9 +1,16 @@
-import { useEffect, useState, type ReactNode } from 'react';
-import type { Toi } from '../app/toi';
+import { useEffect, useRef, useState, type ReactNode, type Ref } from 'react';
+import type { ProviderInfo, Toi } from '../app/toi';
 import type { AppErrorInfo } from '../domain/error';
-import type { Model } from '../domain/model';
+import { modelFamilies, togglePick, type Model, type ModelPicks } from '../domain/model';
 import { downloadJson, errorInfo, lower, requestPersistence } from './support';
 import { readTheme, saveTheme, type ThemePref } from './theme';
+
+export type SettingsSection = 'top' | 'modelos';
+
+export interface ModelPicksError {
+  kind: 'read' | 'save';
+  error: AppErrorInfo;
+}
 
 export interface ModelsState {
   list: Model[];
@@ -14,9 +21,17 @@ export interface ModelsState {
 
 interface SettingsProps {
   toi: Toi;
+  provider: ProviderInfo;
   models: ModelsState;
+  modelPicks: ModelPicks;
+  /** Os Modelos que o seletor oferece, já calculados pelo App. */
+  picked: Model[];
+  modelPicksError: ModelPicksError | null;
+  /** Onde Configurações abre. */
+  section: SettingsSection;
   conversationCount: number;
   onRefreshModels: () => void;
+  onModelPicksChange: (picks: ModelPicks) => void;
   onChangeKey: () => void;
   onKeyRemoved: () => void;
   onErasedAll: () => void;
@@ -25,8 +40,16 @@ interface SettingsProps {
 
 type Confirming = 'remove_key' | 'erase_conversations' | 'erase_all' | null;
 
-const Section = ({ title, children }: { title: string; children: ReactNode }) => (
-  <section className="border-t border-line py-9 first:border-t-0 first:pt-0">
+const Section = ({
+  ref,
+  title,
+  children,
+}: {
+  ref?: Ref<HTMLElement>;
+  title: string;
+  children: ReactNode;
+}) => (
+  <section ref={ref} className="scroll-mt-10 border-t border-line py-9 first:border-t-0 first:pt-0">
     <h2 className="section-title text-xl font-bold text-text sm:text-2xl">{title}</h2>
     <div className="mt-5 space-y-4 text-base text-muted">{children}</div>
   </section>
@@ -55,6 +78,57 @@ const Action = ({
   </button>
 );
 
+/** Uma família por bloco, da versão mais recente para a mais antiga. */
+const ModelList = ({
+  models,
+  picks,
+  picked,
+  onChange,
+}: {
+  models: Model[];
+  picks: ModelPicks;
+  picked: Model[];
+  onChange: (picks: ModelPicks) => void;
+}) => (
+  <div className="grid gap-x-10 gap-y-6 pt-1 sm:grid-cols-2">
+    {modelFamilies(models).map((family) => (
+      <div key={`${family.provider}:${family.name}`}>
+        <h3 className="text-sm text-subtle">{family.name}</h3>
+        <ul className="mt-2 space-y-1.5" aria-label={family.name}>
+          {family.models.map((model, index) => {
+            const checked = picked.includes(model);
+            // O seletor nunca fica vazio: o último marcado não sai.
+            const last = checked && picked.length === 1;
+            return (
+              <li key={`${model.provider}:${model.id}`} className="flex items-baseline gap-3">
+                <button
+                  type="button"
+                  role="checkbox"
+                  aria-checked={checked}
+                  aria-disabled={last}
+                  title={last ? 'o seletor precisa de pelo menos um modelo' : undefined}
+                  onClick={() => {
+                    if (!last) onChange(togglePick(family, picks, model));
+                  }}
+                  className={`text-left ${
+                    checked ? 'text-accent' : 'text-muted hover:text-text'
+                  } ${last ? 'cursor-default' : ''}`}
+                >
+                  <span className="text-subtle">[{checked ? '×' : ' '}]</span>{' '}
+                  {model.displayName.toLowerCase()}
+                </button>
+                {index === 0 && family.models.length > 1 && (
+                  <span className="text-xs text-subtle">mais recente</span>
+                )}
+              </li>
+            );
+          })}
+        </ul>
+      </div>
+    ))}
+  </div>
+);
+
 const THEMES: Array<[ThemePref, string]> = [
   ['system', 'sistema'],
   ['light', 'claro'],
@@ -63,9 +137,15 @@ const THEMES: Array<[ThemePref, string]> = [
 
 export default function Settings({
   toi,
+  provider,
   models,
+  modelPicks,
+  picked,
+  modelPicksError,
+  section,
   conversationCount,
   onRefreshModels,
+  onModelPicksChange,
   onChangeKey,
   onKeyRemoved,
   onErasedAll,
@@ -77,6 +157,12 @@ export default function Settings({
   const [error, setError] = useState<AppErrorInfo | null>(null);
   const [done, setDone] = useState<string | null>(null);
   const [persisted, setPersisted] = useState<boolean | null>(null);
+
+  const modelsSection = useRef<HTMLElement>(null);
+
+  useEffect(() => {
+    if (section === 'modelos') modelsSection.current?.scrollIntoView();
+  }, [section]);
 
   useEffect(() => {
     void navigator.storage?.persisted?.().then(setPersisted, () => setPersisted(null));
@@ -179,13 +265,31 @@ export default function Settings({
             'remover a chave?',
             () =>
               void run(async () => {
-                await toi.disconnect();
+                await toi.disconnect(provider.id);
                 onKeyRemoved();
               }, null),
           )}
         </Section>
 
-        <Section title="modelos">
+        <Section ref={modelsSection} title="modelos">
+          <p>
+            o seletor da conversa mostra só os marcados. a versão mais recente de uma família
+            acompanha os lançamentos; as anteriores ficam fixas.
+          </p>
+          <ModelList
+            models={models.list}
+            picks={modelPicks}
+            picked={picked}
+            onChange={onModelPicksChange}
+          />
+          {modelPicksError && (
+            <p className="text-danger">
+              {modelPicksError.kind === 'read'
+                ? 'não deu para ler a escolha salva; o seletor está no padrão'
+                : 'a última mudança não foi salva'}
+              : {lower(modelPicksError.error.message)}
+            </p>
+          )}
           <p>
             {models.list.length}{' '}
             {models.list.length === 1 ? 'modelo disponível' : 'modelos disponíveis'} para esta

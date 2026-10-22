@@ -38,8 +38,8 @@ const installMock = () => {
           data: [
             {
               type: 'model',
-              id: 'claude-teste',
-              display_name: 'Claude Teste',
+              id: 'claude-sonnet-teste',
+              display_name: 'Claude Sonnet Teste',
               created_at: '2026-01-01T00:00:00Z',
               max_tokens: 8192,
               max_input_tokens: 200000,
@@ -61,7 +61,7 @@ const installMock = () => {
         controller.enqueue(
           frame('message_start', {
             type: 'message_start',
-            message: { model: 'claude-teste', usage: { input_tokens: 12, output_tokens: 1 } },
+            message: { model: 'claude-sonnet-teste', usage: { input_tokens: 12, output_tokens: 1 } },
           }),
         );
         controller.enqueue(

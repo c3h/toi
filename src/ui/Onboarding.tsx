@@ -1,17 +1,18 @@
 import { useEffect, useRef, useState } from 'react';
-import type { Toi } from '../app/toi';
+import type { ProviderInfo, Toi } from '../app/toi';
 import type { AppErrorInfo } from '../domain/error';
 import type { Model } from '../domain/model';
 import { errorInfo, lower } from './support';
 
 interface OnboardingProps {
   toi: Toi;
+  provider: ProviderInfo;
   onConnected: (models: Model[]) => void;
   /** Presente quando já existe uma Chave e a pessoa só está trocando. */
   onCancel?: () => void;
 }
 
-export const Onboarding = ({ toi, onConnected, onCancel }: OnboardingProps) => {
+export const Onboarding = ({ toi, provider, onConnected, onCancel }: OnboardingProps) => {
   const [key, setKey] = useState('');
   const [checking, setChecking] = useState(false);
   const [error, setError] = useState<AppErrorInfo | null>(null);
@@ -37,7 +38,7 @@ export const Onboarding = ({ toi, onConnected, onCancel }: OnboardingProps) => {
     setError(null);
 
     try {
-      const models = await toi.connect(key, current.signal);
+      const models = await toi.connect(provider.id, key, current.signal);
       setKey('');
       onConnected(models);
     } catch (cause) {
@@ -53,11 +54,11 @@ export const Onboarding = ({ toi, onConnected, onCancel }: OnboardingProps) => {
         toi
       </h1>
       <p className="mt-6 text-base text-muted">
-        chat local-first · modelos da anthropic · sem servidor no meio
+        chat local-first · modelos {provider.of.toLowerCase()} · sem servidor no meio
       </p>
       <p className="mt-6 max-w-[64ch] text-base leading-relaxed text-text">
-        o histórico fica neste navegador. a única coisa que sai daqui é a conversa enviada à
-        anthropic para gerar a resposta.
+        o histórico fica neste navegador. a única coisa que sai daqui é a conversa enviada{' '}
+        {provider.to.toLowerCase()} para gerar a resposta.
       </p>
 
       <hr className="my-10 border-line" />
@@ -77,7 +78,7 @@ export const Onboarding = ({ toi, onConnected, onCancel }: OnboardingProps) => {
           type="password"
           value={key}
           onChange={(event) => setKey(event.target.value)}
-          placeholder="sk-ant-…"
+          placeholder={provider.keyPlaceholder}
           autoComplete="off"
           spellCheck={false}
           autoFocus
@@ -94,14 +95,15 @@ export const Onboarding = ({ toi, onConnected, onCancel }: OnboardingProps) => {
           <p id="key-hint" className="mt-3 text-sm leading-relaxed text-subtle">
             crie uma no{' '}
             <a
-              href="https://console.anthropic.com/settings/keys"
+              href={provider.keysUrl}
               target="_blank"
               rel="noopener noreferrer"
               className="text-muted underline decoration-subtle underline-offset-4 hover:text-accent hover:decoration-accent"
             >
-              console da anthropic
+              console {provider.of.toLowerCase()}
             </a>
-            . ela fica guardada neste navegador e só é enviada à anthropic, para autenticar.
+            . ela fica guardada neste navegador e só é enviada {provider.to.toLowerCase()}, para
+            autenticar.
           </p>
         )}
 

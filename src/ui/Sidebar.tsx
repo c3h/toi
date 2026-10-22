@@ -1,7 +1,8 @@
 import { Ellipsis, Pencil, Trash2 } from 'lucide-react';
-import { useRef, useState, type KeyboardEvent } from 'react';
+import { useRef, useState } from 'react';
 import { MAX_TITLE_LENGTH, type Conversation } from '../domain/conversation';
 import type { ConversationId } from '../domain/ids';
+import { MENU_ITEM, MENU_PANEL, useMenu } from './menu';
 import { ageGroup } from './support';
 
 interface SidebarProps {
@@ -27,56 +28,11 @@ interface ItemProps {
   onDelete: () => void;
 }
 
-const MENU_ITEM =
-  'flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-left outline-none transition-colors';
-
 const Item = ({ conversation, active, running, onSelect, onRename, onDelete }: ItemProps) => {
   const [mode, setMode] = useState<'view' | 'rename' | 'delete'>('view');
-  const [menuOpen, setMenuOpen] = useState(false);
   const cancelled = useRef(false);
-  const trigger = useRef<HTMLButtonElement>(null);
-  const menu = useRef<HTMLDivElement>(null);
+  const menu = useMenu({ align: 'end', prefer: 'below' });
   const title = conversation.title.toLowerCase();
-
-  // Popover fica na camada do topo: não é cortado pela rolagem da lista e fecha sozinho ao clicar fora.
-  const openMenu = () => {
-    const button = trigger.current;
-    const popup = menu.current;
-    if (!button || !popup) return;
-
-    popup.showPopover();
-    const anchor = button.getBoundingClientRect();
-    const below = anchor.bottom + 4;
-    const fits = below + popup.offsetHeight <= innerHeight - 8;
-    popup.style.top = `${fits ? below : anchor.top - 4 - popup.offsetHeight}px`;
-    popup.style.left = `${anchor.right - popup.offsetWidth}px`;
-    popup.querySelector<HTMLElement>('[role="menuitem"]')?.focus();
-  };
-
-  const closeMenu = (restoreFocus: boolean) => {
-    menu.current?.hidePopover();
-    if (restoreFocus) trigger.current?.focus();
-  };
-
-  const onMenuKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
-    const items = [...event.currentTarget.querySelectorAll<HTMLElement>('[role="menuitem"]')];
-    const index = items.indexOf(document.activeElement as HTMLElement);
-    const move: Record<string, number> = {
-      ArrowDown: (index + 1) % items.length,
-      ArrowUp: (index - 1 + items.length) % items.length,
-      Home: 0,
-      End: items.length - 1,
-    };
-
-    const target = move[event.key];
-    if (event.key === 'Escape') {
-      event.preventDefault();
-      closeMenu(true);
-    } else if (target !== undefined) {
-      event.preventDefault();
-      items[target]?.focus();
-    }
-  };
 
   if (mode === 'rename') {
     return (
@@ -118,10 +74,11 @@ const Item = ({ conversation, active, running, onSelect, onRename, onDelete }: I
       <button
         type="button"
         aria-current={active ? 'page' : undefined}
+        title={title}
         onClick={onSelect}
         className={`flex w-full items-center gap-2 rounded-sm py-1.5 pr-8 pl-2 text-left text-sm transition-colors group-hover:bg-panel ${
           active ? 'bg-panel text-accent' : 'text-muted group-hover:text-text'
-        } ${menuOpen ? 'bg-panel' : ''}`}
+        } ${menu.open ? 'bg-panel' : ''}`}
       >
         {running && (
           <span
@@ -133,37 +90,30 @@ const Item = ({ conversation, active, running, onSelect, onRename, onDelete }: I
       </button>
 
       <button
-        ref={trigger}
+        ref={menu.trigger}
         type="button"
         aria-label={`ações de ${title}`}
         aria-haspopup="menu"
-        aria-expanded={menuOpen}
+        aria-expanded={menu.open}
         aria-controls={`menu-${conversation.id}`}
-        onClick={() => (menuOpen ? closeMenu(false) : openMenu())}
+        onClick={menu.toggle}
         className="absolute top-0.5 right-1 grid size-6 place-items-center rounded-sm text-subtle opacity-0 transition-[opacity,color] group-hover:opacity-100 hover:bg-line hover:text-text focus-visible:opacity-100 focus-visible:outline-offset-0 aria-expanded:bg-line aria-expanded:text-text aria-expanded:opacity-100 [@media(hover:none)]:opacity-100"
       >
         <Ellipsis size={14} aria-hidden />
       </button>
 
       <div
-        ref={menu}
+        {...menu.panel}
         id={`menu-${conversation.id}`}
-        popover="auto"
-        role="menu"
         aria-label={`ações de ${title}`}
-        onToggle={(event) => setMenuOpen(event.newState === 'open')}
-        onKeyDown={onMenuKeyDown}
-        onBlur={(event) => {
-          if (!event.currentTarget.contains(event.relatedTarget)) closeMenu(false);
-        }}
-        className="m-0 min-w-36 rounded-md border border-line bg-panel p-1 text-sm text-muted shadow-lg shadow-black/30"
+        className={`${MENU_PANEL} min-w-36`}
       >
         <button
           type="button"
           role="menuitem"
           className={`${MENU_ITEM} hover:bg-line hover:text-text focus:bg-line focus:text-text`}
           onClick={() => {
-            closeMenu(false);
+            menu.close(false);
             cancelled.current = false;
             setMode('rename');
           }}
@@ -176,7 +126,7 @@ const Item = ({ conversation, active, running, onSelect, onRename, onDelete }: I
           role="menuitem"
           className={`${MENU_ITEM} text-danger hover:bg-danger/10 focus:bg-danger/10`}
           onClick={() => {
-            closeMenu(false);
+            menu.close(false);
             setMode('delete');
           }}
         >
@@ -204,7 +154,7 @@ const Item = ({ conversation, active, running, onSelect, onRename, onDelete }: I
             className="rounded-sm text-subtle hover:text-text focus-visible:outline-offset-1"
             onClick={() => {
               setMode('view');
-              trigger.current?.focus();
+              menu.trigger.current?.focus();
             }}
           >
             não
@@ -306,7 +256,8 @@ export const Sidebar = ({
       )}
     </div>
 
-    <div className="border-t border-line px-5 py-4">
+    {/* flex tira a linha de 24px herdada; pb maior compensa o vazio acima da tinta da fonte. */}
+    <div className="flex border-t border-line px-5 pt-4.5 pb-5">
       <NavButton shortcut="c" label="configurações" active={settingsOpen} onClick={onSettings} />
     </div>
   </nav>

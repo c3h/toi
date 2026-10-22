@@ -3,14 +3,17 @@ import { userEvent } from 'vitest/browser';
 import { render } from 'vitest-browser-react';
 import { MemoryLocks } from '../../src/adapters/locks/memory';
 import { createToi } from '../../src/app/toi';
+import type { Model } from '../../src/domain/model';
 import type { ChatProvider } from '../../src/ports/chat-provider';
 import { App } from '../../src/ui/App';
 import {
   FailingProvider,
   gatedProvider,
+  makeModel,
   MemoryCredentialStore,
   MemorySettingsStore,
   MemoryStore,
+  providersOf,
   replyEvents,
   ScriptedProvider,
 } from '../helpers';
@@ -27,7 +30,7 @@ const mount = async (createProvider: (key: string) => ChatProvider) => {
     newId: () => `id-${(next += 1)}`,
     owner: 'tab',
     locks: new MemoryLocks(),
-    createProvider,
+    providers: providersOf(createProvider),
   });
   return render(<App toi={toi} />);
 };
@@ -118,5 +121,53 @@ describe('App', () => {
     await userEvent.click(screen.getByRole('button', { name: 'sim, apagar' }));
 
     await expect.element(screen.getByText('suas conversas aparecem aqui.')).toBeVisible();
+  });
+
+  it('o seletor oferece só os Modelos marcados em Configurações', async () => {
+    const model = (id: string, displayName: string, createdAt: string): Model =>
+      makeModel(id, { displayName, createdAt });
+    const models = [
+      model('claude-opus-5-5', 'Claude Opus 5.5', '2026-09-02'),
+      model('claude-sonnet-5-5', 'Claude Sonnet 5.5', '2026-09-01'),
+      model('claude-haiku-5-5', 'Claude Haiku 5.5', '2026-08-01'),
+      model('claude-sonnet-5', 'Claude Sonnet 5', '2026-05-01'),
+    ];
+    const screen = await mount(() => new ScriptedProvider(replyEvents(), models));
+    await connect(screen);
+
+    await userEvent.click(screen.getByRole('button', { name: /^modelo:/ }));
+    const options = screen.getByRole('menuitemradio');
+    await expect.element(options.first()).toBeVisible();
+    expect(options.elements().map((item) => item.textContent)).toEqual([
+      'claude sonnet 5.5',
+      'claude haiku 5.5',
+    ]);
+
+    await userEvent.click(screen.getByRole('menuitem', { name: 'escolher modelos' }));
+    await userEvent.click(screen.getByRole('checkbox', { name: /claude opus 5\.5/ }));
+    await userEvent.click(screen.getByRole('button', { name: /voltar/ }));
+
+    await userEvent.click(screen.getByRole('button', { name: /^modelo:/ }));
+    await userEvent.click(screen.getByRole('menuitemradio', { name: 'claude opus 5.5' }));
+    await expect
+      .element(screen.getByRole('button', { name: 'modelo: claude opus 5.5' }))
+      .toBeVisible();
+  });
+
+  it('sem nenhum Modelo marcado para a Chave, diz isso e leva à escolha', async () => {
+    const opus = makeModel('claude-opus-5-5', { displayName: 'Claude Opus 5.5' });
+    const screen = await mount(() => new ScriptedProvider(replyEvents(), [opus]));
+    await connect(screen);
+
+    await expect
+      .element(screen.getByText('nenhum modelo marcado existe para esta chave.'))
+      .toBeVisible();
+    await userEvent.click(screen.getByRole('button', { name: 'escolher modelos' }));
+    await userEvent.click(screen.getByRole('checkbox', { name: /claude opus 5\.5/ }));
+    await userEvent.click(screen.getByRole('button', { name: /voltar/ }));
+
+    await expect
+      .element(screen.getByRole('button', { name: 'modelo: claude opus 5.5' }))
+      .toBeVisible();
   });
 });

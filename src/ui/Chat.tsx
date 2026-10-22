@@ -1,4 +1,4 @@
-import { ArrowDown, ArrowUp, ChevronDown, RotateCcw, Square, X } from 'lucide-react';
+import { ArrowDown, ArrowUp, RotateCcw, Square, X } from 'lucide-react';
 import {
   memo,
   useEffect,
@@ -9,12 +9,13 @@ import {
   type KeyboardEvent,
   type Ref,
 } from 'react';
-import type { Toi } from '../app/toi';
+import type { ProviderInfo, Toi } from '../app/toi';
 import { messageFor, type AppErrorInfo } from '../domain/error';
 import type { ConversationId } from '../domain/ids';
 import { textOf, type Message } from '../domain/message';
-import type { Model } from '../domain/model';
+import { findModel, refFrom, type Model } from '../domain/model';
 import { CopyButton } from './CopyButton';
+import { ModelPicker } from './ModelPicker';
 import { preloadMarkdown, Prose } from './Prose';
 import { formatTokens, lower } from './support';
 import { useMessages } from './use-messages';
@@ -34,13 +35,18 @@ export interface ChatHandle {
 interface ChatProps {
   ref?: Ref<ChatHandle>;
   toi: Toi;
+  provider: ProviderInfo;
   conversationId: ConversationId | null;
+  /** Todos os Modelos da Chave, para nomear o de cada Mensagem. */
   models: Model[];
+  /** Os que o seletor oferece. */
+  modelOptions: Model[];
   model: Model | null;
   running: boolean;
   notice: Notice | null;
   noticeAction: NoticeAction | null;
-  onModelChange: (id: string) => void;
+  onModelChange: (model: Model) => void;
+  onManageModels: () => void;
   onSend: (text: string) => Promise<boolean>;
   onStop: () => void;
   onRetry: (message: Message) => void;
@@ -54,7 +60,7 @@ const NOTICE_TEXT: Record<Exclude<Notice['kind'], 'error'>, string> = {
 
 const metaLine = (message: Message, models: Model[]): string[] => {
   const parts: string[] = [];
-  const model = models.find((item) => item.id === message.model);
+  const model = findModel(models, refFrom(message));
   if (message.model) parts.push((model?.displayName ?? message.model).toLowerCase());
 
   // Fora de `complete` a contagem de saída é parcial e enganaria.
@@ -136,13 +142,16 @@ const nearBottom = (element: HTMLElement): boolean =>
 export const Chat = ({
   ref,
   toi,
+  provider,
   conversationId,
   models,
+  modelOptions,
   model,
   running,
   notice,
   noticeAction,
   onModelChange,
+  onManageModels,
   onSend,
   onStop,
   onRetry,
@@ -214,7 +223,7 @@ export const Chat = ({
               toi
             </p>
             <p className="mt-5 text-base text-muted">
-              converse com os modelos da anthropic · o histórico fica neste navegador
+              converse com os modelos {provider.of.toLowerCase()} · o histórico fica neste navegador
             </p>
             <ul className="mt-8 hidden flex-wrap gap-x-6 gap-y-2 text-sm text-subtle sm:flex">
               <li>
@@ -319,26 +328,13 @@ export const Chat = ({
           />
           <div className="flex items-center justify-between gap-3 py-2 pr-2 pl-2.5">
             {model ? (
-              <label className="relative inline-flex min-w-0 items-center rounded-sm text-xs text-subtle transition-colors hover:bg-line/60 hover:text-text">
-                <span className="sr-only">modelo</span>
-                <select
-                  value={model.id}
-                  disabled={running}
-                  onChange={(event) => onModelChange(event.target.value)}
-                  className="max-w-[14rem] min-w-0 cursor-pointer appearance-none truncate rounded-sm bg-transparent py-1 pr-6 pl-1.5 [field-sizing:content] focus-visible:outline-offset-0 disabled:cursor-default disabled:opacity-60"
-                >
-                  {models.map((option) => (
-                    <option key={option.id} value={option.id} className="bg-panel text-text">
-                      {option.displayName.toLowerCase()}
-                    </option>
-                  ))}
-                </select>
-                <ChevronDown
-                  size={12}
-                  aria-hidden
-                  className="pointer-events-none absolute right-1.5"
-                />
-              </label>
+              <ModelPicker
+                options={modelOptions}
+                model={model}
+                disabled={running}
+                onChange={onModelChange}
+                onManage={onManageModels}
+              />
             ) : (
               <span />
             )}

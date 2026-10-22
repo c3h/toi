@@ -1,19 +1,40 @@
 import { Menu } from 'lucide-react';
-import { lazy, Suspense, useCallback, useEffect, useRef, useState } from 'react';
+import { lazy, Suspense, useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
 import type { RunResult } from '../app/send-message';
 import type { Toi } from '../app/toi';
 import type { Conversation } from '../domain/conversation';
 import type { ConversationId } from '../domain/ids';
 import type { Message } from '../domain/message';
-import { defaultModel } from '../domain/model';
+import {
+  defaultModel,
+  findModel,
+  pickedModels,
+  refFrom,
+  refOf,
+  type Model,
+  type ModelPicks,
+  type ModelRef,
+} from '../domain/model';
 import { Chat, type ChatHandle, type Notice, type NoticeAction } from './Chat';
 import { Onboarding } from './Onboarding';
-import type { ModelsState } from './Settings';
+import type { ModelPicksError, ModelsState, SettingsSection } from './Settings';
 import { Sidebar } from './Sidebar';
 import { errorInfo, isTyping, lower, requestPersistence, selection } from './support';
 import { followSystemTheme } from './theme';
 
 const Settings = lazy(() => import('./Settings'));
+
+/** Tela no lugar do Chat quando não há Modelo para conversar: o motivo e o que resolve. */
+const Blocked = ({ message, children }: { message: string; children: ReactNode }) => (
+  <div className="flex flex-1 flex-col justify-center px-4 sm:px-8">
+    <div className="mx-auto w-full max-w-[44rem]">
+      <p className="text-base text-text">
+        <span className="text-danger">*</span> {message}
+      </p>
+      <div className="mt-5 flex gap-6 text-base">{children}</div>
+    </div>
+  </div>
+);
 
 const noticeFrom = (result: RunResult): Notice | null => {
   if (result.persistError) return { kind: 'not_saved' };
@@ -22,11 +43,15 @@ const noticeFrom = (result: RunResult): Notice | null => {
 };
 
 export const App = ({ toi }: { toi: Toi }) => {
+  // Um Provedor registrado por enquanto; a escolha entre vários entra com o segundo.
+  const provider = toi.providers()[0]!;
   const [connected, setConnected] = useState(toi.connected());
   const [changingKey, setChangingKey] = useState(false);
-  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [settings, setSettings] = useState<SettingsSection | null>(null);
   const [models, setModels] = useState<ModelsState>({ list: [], stale: null, refreshing: true });
-  const [lastModel, setLastModel] = useState<string | null>(null);
+  const [lastModel, setLastModel] = useState<ModelRef | null>(null);
+  const [modelPicks, setModelPicks] = useState<ModelPicks>(toi.defaultModelPicks);
+  const [modelPicksError, setModelPicksError] = useState<ModelPicksError | null>(null);
   const [conversations, setConversations] = useState<Conversation[] | null>(null);
   const [selected, setSelected] = useState<ConversationId | null>(selection.read);
   const [running, setRunning] = useState<ConversationId | null>(null);
@@ -40,6 +65,9 @@ export const App = ({ toi }: { toi: Toi }) => {
   useEffect(() => followSystemTheme(), []);
   useEffect(() => {
     void toi.lastModel().then(setLastModel);
+    void toi.modelPicks().then(setModelPicks, (cause) =>
+      setModelPicksError({ kind: 'read', error: errorInfo(cause) }),
+    );
   }, [toi]);
 
   const loadModels = useCallback(
@@ -72,7 +100,7 @@ export const App = ({ toi }: { toi: Toi }) => {
     selection.write(id);
     setNotice(null);
     setSidebarOpen(false);
-    setSettingsOpen(false);
+    setSettings(null);
   }, []);
 
   // Seleção que não existe mais (apagada aqui ou em outra aba) vira rascunho.
@@ -81,12 +109,27 @@ export const App = ({ toi }: { toi: Toi }) => {
   }, [conversations, selected, conversation, select]);
 
   const list = models.list;
+  const options = pickedModels(list, modelPicks);
   const model =
-    list.find((item) => item.id === conversation?.model) ?? defaultModel(list, lastModel);
+    findModel(list, refFrom(conversation)) ??
+    defaultModel(options, lastModel);
 
-  const changeModel = async (id: string) => {
-    setLastModel(id);
-    if (conversation) await toi.changeModel(conversation.id, id);
+  // Otimista; se não grava, volta ao que está salvo e diz por quê.
+  const changeModelPicks = async (picks: ModelPicks) => {
+    const previous = modelPicks;
+    setModelPicks(picks);
+    try {
+      await toi.saveModelPicks(picks);
+      setModelPicksError(null);
+    } catch (cause) {
+      setModelPicks(previous);
+      setModelPicksError({ kind: 'save', error: errorInfo(cause) });
+    }
+  };
+
+  const changeModel = async (next: Model) => {
+    setLastModel(refOf(next));
+    if (conversation) await toi.changeModel(conversation.id, refOf(next));
   };
 
   const run = async (
@@ -115,14 +158,14 @@ export const App = ({ toi }: { toi: Toi }) => {
     let target = conversation;
     if (!target) {
       try {
-        target = await toi.createConversation(model.id);
+        target = await toi.createConversation(refOf(model));
       } catch (cause) {
         setNotice({ kind: 'error', error: errorInfo(cause) });
         return false;
       }
       // Pedir cedo reduz a chance de o navegador descartar o histórico.
       void requestPersistence();
-      setLastModel(model.id);
+      setLastModel(refOf(model));
       const created = target;
       // Entra já na lista para a seleção não ser descartada antes de o watch entregar.
       setConversations((current) =>
@@ -185,7 +228,7 @@ export const App = ({ toi }: { toi: Toi }) => {
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key === 'Escape') {
         if (running) void toi.flow.stop();
-        else if (settingsOpen) setSettingsOpen(false);
+        else if (settings) setSettings(null);
         else if (sidebarOpen) setSidebarOpen(false);
         return;
       }
@@ -193,26 +236,27 @@ export const App = ({ toi }: { toi: Toi }) => {
 
       if (event.key === '/') {
         event.preventDefault();
-        setSettingsOpen(false);
+        setSettings(null);
         requestAnimationFrame(() => chat.current?.focus());
       } else if (event.key === 'n') {
         event.preventDefault();
         newConversation();
       } else if (event.key === 'c') {
         event.preventDefault();
-        setSettingsOpen((open) => !open);
+        setSettings((open) => (open ? null : 'top'));
         setSidebarOpen(false);
       }
     };
 
     addEventListener('keydown', onKeyDown);
     return () => removeEventListener('keydown', onKeyDown);
-  }, [toi, connected, changingKey, running, settingsOpen, sidebarOpen, newConversation]);
+  }, [toi, connected, changingKey, running, settings, sidebarOpen, newConversation]);
 
   if (!connected || changingKey) {
     return (
       <Onboarding
         toi={toi}
+        provider={provider}
         onCancel={connected ? () => setChangingKey(false) : undefined}
         onConnected={(fresh) => {
           setModels({ list: fresh, stale: null, refreshing: false });
@@ -237,7 +281,7 @@ export const App = ({ toi }: { toi: Toi }) => {
         conversations={conversations ?? []}
         selected={selected}
         running={running}
-        settingsOpen={settingsOpen}
+        settingsOpen={settings !== null}
         open={sidebarOpen}
         now={Date.now()}
         onNew={newConversation}
@@ -245,7 +289,7 @@ export const App = ({ toi }: { toi: Toi }) => {
         onRename={(id, title) => void toi.renameConversation(id, title)}
         onDelete={(id) => void remove(id)}
         onSettings={() => {
-          setSettingsOpen(true);
+          setSettings('top');
           setSidebarOpen(false);
         }}
       />
@@ -259,11 +303,17 @@ export const App = ({ toi }: { toi: Toi }) => {
       )}
 
       <div className="flex min-h-0 min-w-0 flex-col">
-        {settingsOpen ? (
+        {settings ? (
           <Suspense fallback={<div className="flex-1" />}>
             <Settings
               toi={toi}
+              provider={provider}
               models={models}
+              modelPicks={modelPicks}
+              picked={options}
+              modelPicksError={modelPicksError}
+              section={settings}
+              onModelPicksChange={(picks) => void changeModelPicks(picks)}
               conversationCount={conversations?.length ?? 0}
               onRefreshModels={() => void loadModels(true)}
               onChangeKey={() => setChangingKey(true)}
@@ -271,14 +321,17 @@ export const App = ({ toi }: { toi: Toi }) => {
               onErasedAll={() => {
                 select(null);
                 setLastModel(null);
+                setModelPicks(toi.defaultModelPicks());
+                setModelPicksError(null);
                 setConnected(false);
               }}
-              onClose={() => setSettingsOpen(false)}
+              onClose={() => setSettings(null)}
             />
           </Suspense>
         ) : (
           <>
-            <header className="flex items-center gap-3 border-b border-line px-4 py-3 sm:px-8">
+            {/* No desktop a sidebar já mostra a Conversa ativa; o título fica só para leitor de tela. */}
+            <header className="flex items-center gap-3 px-4 py-3 sm:px-8 md:sr-only">
               <button
                 type="button"
                 aria-label="abrir conversas"
@@ -299,40 +352,46 @@ export const App = ({ toi }: { toi: Toi }) => {
             </header>
 
             {blocker ? (
-              <div className="flex flex-1 flex-col justify-center px-4 sm:px-8">
-                <div className="mx-auto w-full max-w-[44rem]">
-                  <p className="text-base text-text">
-                    <span className="text-danger">*</span> {blocker}
-                  </p>
-                  <div className="mt-5 flex gap-6 text-base">
-                    <button
-                      type="button"
-                      className="text-accent hover:underline"
-                      onClick={() => void loadModels(true)}
-                    >
-                      tentar de novo
-                    </button>
-                    <button
-                      type="button"
-                      className="text-muted hover:text-accent"
-                      onClick={() => setChangingKey(true)}
-                    >
-                      trocar chave
-                    </button>
-                  </div>
-                </div>
-              </div>
+              <Blocked message={blocker}>
+                <button
+                  type="button"
+                  className="text-accent hover:underline"
+                  onClick={() => void loadModels(true)}
+                >
+                  tentar de novo
+                </button>
+                <button
+                  type="button"
+                  className="text-muted hover:text-accent"
+                  onClick={() => setChangingKey(true)}
+                >
+                  trocar chave
+                </button>
+              </Blocked>
+            ) : !model ? (
+              <Blocked message="nenhum modelo marcado existe para esta chave.">
+                <button
+                  type="button"
+                  className="text-accent hover:underline"
+                  onClick={() => setSettings('modelos')}
+                >
+                  escolher modelos
+                </button>
+              </Blocked>
             ) : (
               <Chat
                 ref={chat}
                 toi={toi}
+                provider={provider}
                 conversationId={selected}
                 models={list}
+                modelOptions={options}
                 model={model}
                 running={running !== null}
                 notice={notice}
                 noticeAction={noticeAction(notice)}
-                onModelChange={(id) => void changeModel(id)}
+                onModelChange={(next) => void changeModel(next)}
+                onManageModels={() => setSettings('modelos')}
                 onSend={send}
                 onStop={() => void toi.flow.stop()}
                 onRetry={retry}
