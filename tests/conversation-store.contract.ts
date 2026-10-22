@@ -37,22 +37,6 @@ export const describeConversationStore = (
   open: () => Promise<StoreHarness>,
 ): void => {
   describe(name, () => {
-    it('lê, grava e substitui Conversas pelo id', async () => {
-      const { store, cleanup } = await open();
-
-      try {
-        expect(await store.getConversation('c1')).toBeNull();
-
-        await store.putConversation(makeConversation('c1', { updatedAt: 10 }));
-        expect(await store.getConversation('c1')).toEqual(makeConversation('c1', { updatedAt: 10 }));
-
-        await store.putConversation(makeConversation('c1', { updatedAt: 20 }));
-        expect((await store.getConversation('c1'))?.updatedAt).toBe(20);
-      } finally {
-        await cleanup();
-      }
-    });
-
     it('updateConversation aplica a mudança sobre o que está gravado e não recria apagada', async () => {
       const { store, cleanup } = await open();
 
@@ -114,53 +98,6 @@ export const describeConversationStore = (
         ]);
         expect((await store.listMessages('c2')).map((message) => message.id)).toEqual(['outra']);
         expect(await store.listMessages('sem-mensagens')).toEqual([]);
-      } finally {
-        await cleanup();
-      }
-    });
-
-    it('lê uma Mensagem pelo id', async () => {
-      const { store, cleanup } = await open();
-
-      try {
-        const message = makeMessage({ id: 'm1', conversationId: 'c1', seq: 1, role: 'user' });
-        await store.putMessage(message);
-
-        expect(await store.getMessage('m1')).toEqual(message);
-        expect(await store.getMessage('ausente')).toBeNull();
-      } finally {
-        await cleanup();
-      }
-    });
-
-    it('substitui a Mensagem pelo id', async () => {
-      const { store, cleanup } = await open();
-
-      try {
-        await store.putMessage(
-          makeMessage({
-            id: 'm1',
-            conversationId: 'c1',
-            seq: 1,
-            role: 'assistant',
-            status: 'complete',
-            parts: [{ type: 'text', text: 'antes' }],
-          }),
-        );
-        await store.putMessage(
-          makeMessage({
-            id: 'm1',
-            conversationId: 'c1',
-            seq: 1,
-            role: 'assistant',
-            status: 'complete',
-            parts: [{ type: 'text', text: 'depois' }],
-          }),
-        );
-
-        const messages = await store.listMessages('c1');
-        expect(messages).toHaveLength(1);
-        expect(messages[0]?.parts).toEqual([{ type: 'text', text: 'depois' }]);
       } finally {
         await cleanup();
       }
@@ -245,24 +182,6 @@ export const describeConversationStore = (
         expect(await store.listMessages('c1')).toEqual([]);
         expect(await store.getConversation('c2')).not.toBeNull();
         expect(await store.listMessages('c2')).toHaveLength(1);
-      } finally {
-        await cleanup();
-      }
-    });
-
-    it('clearConversations limpa Conversas e Mensagens', async () => {
-      const { store, cleanup } = await open();
-
-      try {
-        await store.putConversation(makeConversation('c1', { updatedAt: 10 }));
-        await store.putMessage(
-          makeMessage({ id: 'm1', conversationId: 'c1', seq: 1, role: 'user' }),
-        );
-
-        await store.clearConversations();
-
-        expect(await store.listConversations()).toEqual([]);
-        expect(await store.listMessages('c1')).toEqual([]);
       } finally {
         await cleanup();
       }

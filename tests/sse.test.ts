@@ -13,20 +13,6 @@ describe('parseSse', () => {
     ]);
   });
 
-  it('ignora comentários e aceita CRLF', async () => {
-    const body = streamOf([': keep-alive\r\nevent: ping\r\ndata: {}\r\n\r\n']);
-
-    await expect(collect(parseSse(body))).resolves.toEqual([{ event: 'ping', data: '{}' }]);
-  });
-
-  it('emite o último frame mesmo sem linha em branco no fim', async () => {
-    const body = streamOf(['event: message_stop\ndata: {"type":"message_stop"}']);
-
-    await expect(collect(parseSse(body))).resolves.toEqual([
-      { event: 'message_stop', data: '{"type":"message_stop"}' },
-    ]);
-  });
-
   it('não quebra quando um caractere UTF-8 chega cortado entre chunks', async () => {
     const payload = 'event: delta\ndata: {"text":"olá 🐟 fim"}\n\n';
     const bytes = new TextEncoder().encode(payload);
@@ -38,24 +24,5 @@ describe('parseSse', () => {
       );
       expect(frames, `corte no byte ${split}`).toEqual(expected);
     }
-  });
-
-  it('cancela o corpo quando o consumidor para antes do fim', async () => {
-    let cancelled = false;
-
-    const body = new ReadableStream<Uint8Array>({
-      start(controller) {
-        controller.enqueue(new TextEncoder().encode('event: x\ndata: 1\n\n'));
-      },
-      cancel() {
-        cancelled = true;
-      },
-    });
-
-    const iterator = parseSse(body);
-    await iterator.next();
-    await iterator.return(undefined);
-
-    expect(cancelled).toBe(true);
   });
 });

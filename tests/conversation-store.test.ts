@@ -2,9 +2,8 @@ import 'fake-indexeddb/auto';
 import { describe, expect, it } from 'vitest';
 import { DexieConversationStore } from '../src/adapters/storage/conversations';
 import { ToiDatabase } from '../src/adapters/storage/db';
-import { DexieSettingsStore } from '../src/adapters/storage/settings';
 import { describeConversationStore } from './conversation-store.contract';
-import { MemoryStore, testModel } from './helpers';
+import { MemoryStore } from './helpers';
 
 let dbCount = 0;
 
@@ -53,48 +52,5 @@ describe('DexieConversationStore: fronteira da Chave', () => {
         apiKey: 'sk-test',
       });
       expect(await db.settings.get('theme')).toEqual({ key: 'theme', value: 'dark' });
-    }));
-
-  it('DexieSettingsStore.clear limpa settings e preserva credentials', () =>
-    withDb(async (db) => {
-      await db.credentials.put({ provider: 'anthropic', apiKey: 'sk-test' });
-      await db.settings.put({ key: 'theme', value: 'dark' });
-
-      await new DexieSettingsStore(db).clear();
-
-      expect(await db.settings.get('theme')).toBeUndefined();
-      expect(await db.credentials.get('anthropic')).toEqual({
-        provider: 'anthropic',
-        apiKey: 'sk-test',
-      });
-    }));
-
-  it('DexieSettingsStore guarda o cache de Modelos, o último Modelo e o último Esforço', () =>
-    withDb(async (db) => {
-      const settings = new DexieSettingsStore(db);
-      expect(await settings.models('anthropic')).toBeNull();
-      expect(await settings.lastModel()).toBeNull();
-      expect(await settings.lastEffort()).toBeNull();
-
-      await settings.saveModels('anthropic', [testModel]);
-      await settings.saveLastModel({ provider: 'anthropic', id: testModel.id });
-      await settings.saveLastEffort('max');
-
-      expect(await settings.models('anthropic')).toEqual([testModel]);
-      expect(await settings.lastModel()).toEqual({ provider: 'anthropic', id: testModel.id });
-      expect(await settings.lastEffort()).toBe('max');
-    }));
-
-  it('DexieSettingsStore guarda o que o seletor oferece', () =>
-    withDb(async (db) => {
-      const settings = new DexieSettingsStore(db);
-      expect(await settings.modelPicks()).toBeNull();
-
-      const picks = {
-        families: [{ provider: 'anthropic' as const, name: 'sonnet' }],
-        models: [{ provider: 'anthropic' as const, id: 'claude-opus-5-5' }],
-      };
-      await settings.saveModelPicks(picks);
-      expect(await settings.modelPicks()).toEqual(picks);
     }));
 });

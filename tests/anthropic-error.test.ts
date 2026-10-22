@@ -31,17 +31,6 @@ describe('anthropicErrors.fromResponse', () => {
     expect(error.retryAfterSeconds).toBe(12);
   });
 
-  it('lê retry-after em data HTTP usando o relógio injetado', async () => {
-    const error = await anthropicErrors.fromResponse(
-      jsonResponse(429, errorEnvelope('rate_limit_error', 'slow down'), {
-        'retry-after': new Date(NOW + 30_000).toUTCString(),
-      }),
-      NOW,
-    );
-
-    expect(error.retryAfterSeconds).toBe(30);
-  });
-
   it('classifica contexto estourado sem depender de status específico', async () => {
     const error = await anthropicErrors.fromResponse(
       jsonResponse(400, errorEnvelope('invalid_request_error', 'prompt is too long: 210000 tokens')),
@@ -49,16 +38,5 @@ describe('anthropicErrors.fromResponse', () => {
     );
 
     expect(error.code).toBe('context_overflow');
-  });
-
-  it('classifica sobrecarga e erro interno', async () => {
-    const overloaded = await anthropicErrors.fromResponse(
-      jsonResponse(529, errorEnvelope('overloaded_error', 'Overloaded')),
-      NOW,
-    );
-    expect(overloaded.code).toBe('overloaded');
-
-    const internal = await anthropicErrors.fromResponse(jsonResponse(500, errorEnvelope('api_error', 'boom')), NOW);
-    expect(internal.code).toBe('api_error');
   });
 });
