@@ -11,7 +11,7 @@ Um dado que existe apenas no perfil do navegador onde foi criado. Não há cópi
 _Avoid_: Offline, privado (privacidade é consequência, não o significado)
 
 **Conversa**:
-A unidade de histórico: uma sequência ordenada de Mensagens, com Título, Modelo e timestamps.
+A unidade de histórico: uma sequência ordenada de Mensagens, com Título, Modelo, Esforço e timestamps.
 _Avoid_: Chat, thread, sessão
 
 **Mensagem**:
@@ -49,6 +49,10 @@ _Avoid_: Provedor (quando se fala do formato), dialeto, SDK
 **Modelo**:
 Um identificador oferecido pelo Provedor, descoberto pela API e escolhido pela pessoa. Só é único junto com o Provedor.
 _Avoid_: Engine, LLM
+
+**Esforço**:
+O quanto o Modelo raciocina e gasta numa resposta, numa escala de cinco níveis (`low` a `max`), escolhido pela pessoa ao lado do Modelo e sempre enviado. Todo Modelo oferecido aceita a escala inteira.
+_Avoid_: Effort (em texto corrido), nível de raciocínio, padrão
 
 **Chave**:
 A credencial de um Provedor fornecida pela pessoa, guardada apenas no navegador; uma por Provedor.

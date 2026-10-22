@@ -9,7 +9,7 @@ Um chat que responde uma pergunta com um Modelo da Anthropic, com Fluxo, cancela
 **A v1 faz:**
 
 - adicionar, validar, trocar e remover a Chave;
-- listar Modelos via `GET /v1/models` e escolher um;
+- listar Modelos via `GET /v1/models` e escolher um, com o Esforço ao lado;
 - criar Conversa, enviar Mensagem, receber Fluxo, parar;
 - renomear e apagar Conversas na barra lateral;
 - apagar todas as Conversas (preserva a Chave) e apagar tudo (remove a Chave);
@@ -52,7 +52,7 @@ src/
 
 **Regra de dependência:** `ui → app → ports ← adapters`; todos podem importar `domain`; `domain` não importa ninguém. `app` não importa `adapters` e recebe as implementações por injeção. `main.tsx` é o composition root e injeta as implementações concretas; cada Provedor entra em `Toi` como um `ProviderAdapter` (`info` + `create(key)`) na lista `providers`. Provedor e Protocolo são papéis separados dentro de `adapters` ([ADR 0008](adr/0008-provider-and-protocol.md)).
 
-As portas existem por fronteiras reais: `ChatProvider` isola o HTTP de terceiro e permite um segundo Provedor, e `ProviderInfo` é tudo que a UI sabe dele; o storage permite trocar IndexedDB ou usar memória em teste; `Locks` coordena abas por Web Locks; `TokenEstimator` permite substituir a heurística pela contagem exata sem tocar no domínio; `SettingsStore` guarda o cache de Modelos, o último Modelo escolhido e quais Modelos o seletor oferece.
+As portas existem por fronteiras reais: `ChatProvider` isola o HTTP de terceiro e permite um segundo Provedor, e `ProviderInfo` é tudo que a UI sabe dele; o storage permite trocar IndexedDB ou usar memória em teste; `Locks` coordena abas por Web Locks; `TokenEstimator` permite substituir a heurística pela contagem exata sem tocar no domínio; `SettingsStore` guarda o cache de Modelos, o último Modelo e o último Esforço e quais Modelos o seletor oferece.
 
 ## 4. Ciclo de uma Mensagem
 
@@ -116,11 +116,12 @@ Regras do adaptador:
 | `Part` `text` | bloco `text` |
 | `Part` `reasoning` | bloco `thinking` com `signature` (o `build-request` da v1 não envia) |
 | `ChatRequest.system` | `system`, só quando definido |
+| `ChatRequest.effort` | `output_config.effort`, sempre |
 | `delta` de texto | `content_block_delta` → `text_delta` |
 | `usage` | `message_start.usage` + `message_delta.usage` |
 | `stopReason` | `message_delta.delta.stop_reason` |
 
-A porta carrega Partes, não texto ([ADR 0003](adr/0003-message-as-parts-and-normalized-events.md)): raciocínio, imagem e ferramentas entram sem mudar o contrato. `system` existe na porta, mas a v1 não o preenche; system prompt é sempre campo próprio, nunca Mensagem. A porta não tem parâmetros de amostragem.
+A porta carrega Partes, não texto ([ADR 0003](adr/0003-message-as-parts-and-normalized-events.md)): raciocínio, imagem e ferramentas entram sem mudar o contrato. `system` existe na porta, mas a v1 não o preenche; system prompt é sempre campo próprio, nunca Mensagem. A porta não tem parâmetros de amostragem. O Esforço vai em todo envio: regula quanto o Modelo raciocina, mas o raciocínio continua oculto — nenhum `thinking` é pedido nem persistido (§1).
 
 A Anthropic usa o Protocolo `anthropic-messages`; `anthropic-version` é do Protocolo, `x-api-key` e o header de acesso pelo navegador são do Provedor.
 
@@ -133,7 +134,7 @@ anthropic-version: 2026-10-21
 anthropic-dangerous-direct-browser-access: true
 content-type: application/json
 
-{ model, max_tokens, messages, stream: true, system? }
+{ model, max_tokens, messages, stream: true, output_config: { effort }, system? }
 ```
 
 `max_tokens` é obrigatório. Default: `Math.min(8192, model.max_tokens ?? 8192)`.
@@ -144,7 +145,7 @@ Modelos:
 GET https://api.anthropic.com/v1/models?limit=1000
 ```
 
-Seguimos `has_more`/`last_id` por até 20 páginas e descartamos `lifecycle` diferente de `active` quando presente. Guardamos `id`, `display_name`, `max_tokens`, `max_input_tokens` e `created_at`, mais o Provedor e a família. Nenhum ID de Modelo é fixo no código; a identidade de um Modelo inclui o Provedor ([ADR 0008](adr/0008-provider-and-protocol.md)).
+Seguimos `has_more`/`last_id` por até 20 páginas e descartamos `lifecycle` diferente de `active` quando presente e os Modelos cujo `capabilities.effort` não aceita a escala inteira de Esforço: sem eles não há nível que falte a um Modelo nem envio sem Esforço. Guardamos `id`, `display_name`, `max_tokens`, `max_input_tokens` e `created_at`, mais o Provedor e a família. Nenhum ID de Modelo é fixo no código; a identidade de um Modelo inclui o Provedor ([ADR 0008](adr/0008-provider-and-protocol.md)).
 
 O seletor não mostra a lista inteira. A família vem do Provedor; na Anthropic é o primeiro trecho só de letras do id depois de `claude` (`providers/anthropic/models.ts`). A escolha (`settings.modelPicks`) marca famílias, que acompanham a versão mais recente, e Modelos, que fixam uma versão, ambos com Provedor. O padrão são as famílias que cada Provedor sugere no descritor (Sonnet e Haiku na Anthropic), e Configurações lista todas as famílias para marcar outras. Se nenhuma marcação existe para a Chave, o Chat dá lugar ao estado explícito "nenhum modelo marcado existe para esta chave", com o atalho para escolher; não há troca silenciosa por outro Modelo. Um Modelo desmarcado que uma Conversa usa continua aparecendo nela. Falha ao ler ou gravar a escolha aparece em Configurações; gravar é otimista e volta ao estado salvo se falhar.
 
@@ -154,7 +155,7 @@ A lista fica em cache em `settings`, uma por Provedor (`toi.models()` junta as d
 
 1. Sem Chave: onboarding pede a Chave.
 2. "Validar" = `GET /v1/models` com a Chave candidata. Não gastamos uma chamada de `messages`.
-3. Sucesso: grava a Chave e o cache de Modelos; o default é o último Modelo escolhido ou, sem ele, o mais recente entre os que o seletor oferece. A Conversa só é criada no primeiro envio.
+3. Sucesso: grava a Chave e o cache de Modelos; o default é o último Modelo usado ou, sem ele, o mais recente entre os que o seletor oferece, com o último Esforço usado ou, sem ele, o menor. A Conversa só é criada no primeiro envio.
 4. Falha: erro tipado, sem gravar a Chave, com "tentar de novo".
 5. Lista vazia: estado explícito "nenhum Modelo disponível para esta Chave", com retry.
 
@@ -166,9 +167,9 @@ IndexedDB via Dexie. O schema está em `src/adapters/storage/db.ts`: `conversati
 
 | Store | Conteúdo | Nunca contém |
 |---|---|---|
-| `conversations` | id, título, Provedor e Modelo, timestamps | Mensagens |
-| `messages` | id, conversationId, seq, papel, partes, estado, timestamps (incluindo o primeiro token), Provedor e Modelo, uso, stopReason, erro | Chave |
-| `settings` | último Modelo, cache de Modelos por Provedor, Modelos do seletor | Chave |
+| `conversations` | id, título, Provedor, Modelo e Esforço, timestamps | Mensagens |
+| `messages` | id, conversationId, seq, papel, partes, estado, timestamps (incluindo o primeiro token), Provedor, Modelo e Esforço, uso, stopReason, erro | Chave |
+| `settings` | último Modelo e último Esforço, cache de Modelos por Provedor, Modelos do seletor | Chave |
 | `credentials` | Provedor → Chave | Qualquer dado de Conversa |
 
 **Formato gravado:** o adaptador converte o domínio para registros escritos à mão (`adapters/storage/records.ts`) e de volta; como mudar a forma gravada está no [ADR 0007](adr/0007-explicit-persisted-formats.md).
@@ -181,13 +182,13 @@ IndexedDB via Dexie. O schema está em `src/adapters/storage/db.ts`: `conversati
 
 **Seleção de Conversa:** estado efêmero da UI, espelhado em `sessionStorage` para sobreviver a reload. Não é `settings`: duas abas podem ter seleções diferentes.
 
-**Modelo:** `conversation.provider` + `conversation.model` são a fonte da verdade. O seletor muda a Conversa atual (`toi.changeModel`, sem mexer em `updatedAt`); `settings.lastModel`, também com Provedor, só define o default de uma Conversa nova e é gravado ao escolher ou criar.
+**Modelo e Esforço:** `conversation.provider` + `conversation.model` + `conversation.effort` são a fonte da verdade. Os seletores mudam a Conversa atual (`toi.changeModel`/`toi.changeEffort`, sem mexer em `updatedAt`); a resposta grava o Esforço pedido, como grava o Modelo. `settings.lastModel`, também com Provedor, e `settings.lastEffort` só definem o default de uma Conversa nova: são gravados a cada envio e a cada troca numa Conversa; no rascunho, a troca vale até o primeiro envio gravá-la. Falhar ao gravá-los não impede o envio. Sem `lastEffort`, a Conversa nova começa no menor Esforço.
 
 **Tema:** preferência visual desta máquina em `localStorage` (`toi:theme`), lida por `public/theme.js` antes do primeiro paint — IndexedDB é assíncrono e o tema piscaria. Não é dado de Conversa; "apagar tudo" também o limpa.
 
 **Duas abas:** a seleção é independente; a barra lateral e a Conversa aberta observam o store (`watchConversations`/`watchMessages`, `liveQuery` no Dexie), então o que outra aba grava aparece sem recarregar — no ritmo do flush, a cada 300 ms; Mensagens de uma Conversa são escritas por uma aba por vez (§4). Metadados da Conversa, como Título e Modelo, seguem last write wins, e cada mudança é lida e gravada numa só transação (`updateConversation`): o fim de um Fluxo só toca `updatedAt` e não desfaz a troca de Modelo ou o Título que outra aba ou a pessoa mudou enquanto a resposta chegava. Sem merge de texto entre abas.
 
-**Exportação:** `toi.exportHistory()` devolve um retrato do histórico no formato `toi.history` versão 1 (`app/export.ts`); a UI só transforma em arquivo. Lê apenas a porta de Conversas, então a Chave não tem caminho até o arquivo. Mensagem em Fluxo sai como `interrupted`.
+**Exportação:** `toi.exportHistory()` devolve um retrato do histórico no formato `toi.history` versão 1 (`app/export.ts`); a UI só transforma em arquivo. Lê apenas a porta de Conversas, então a Chave não tem caminho até o arquivo. Mensagem em Fluxo sai como `interrupted`. O Esforço da Conversa e da Mensagem entrou como campo novo, compatível, sem subir `version`.
 
 **Apagar conversas** limpa `conversations` e `messages`; **apagar tudo** também remove Configurações e todas as Chaves, por composição no app ([ADR 0004](adr/0004-indexeddb-separate-credential-store.md)). Duas ações distintas em Configurações, ambas com confirmação explícita na própria linha.
 
