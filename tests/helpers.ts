@@ -358,8 +358,24 @@ export class MemorySettingsStore implements SettingsStore {
     this.values.set('titleModel', model);
   }
 
+  async instructions(): Promise<string | null> {
+    return (this.values.get('instructions') as string | undefined) ?? null;
+  }
+
+  async saveInstructions(text: string | null): Promise<void> {
+    if (text === null) this.values.delete('instructions');
+    else this.values.set('instructions', text);
+  }
+
   async clear(): Promise<void> {
     this.values.clear();
+  }
+}
+
+/** Configurações cujas Instruções não podem ser lidas, como com o IndexedDB bloqueado. */
+export class UnreadableInstructions extends MemorySettingsStore {
+  override async instructions(): Promise<string | null> {
+    throw new DOMException('bloqueado', 'UnknownError');
   }
 }
 

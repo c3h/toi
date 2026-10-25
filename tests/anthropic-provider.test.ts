@@ -33,6 +33,7 @@ describe('AnthropicProvider', () => {
           maxTokens: 128,
           effort: 'low',
           reasoning: 'on',
+          system: null,
           tools: [],
           messages: [{ role: 'user', parts: [{ type: 'text', text: 'oi' }] }],
         },
@@ -67,6 +68,7 @@ describe('AnthropicProvider', () => {
         maxTokens: 128,
         effort: 'low',
         reasoning: 'on',
+        system: null,
         tools: [],
         messages: [
           {
@@ -106,6 +108,7 @@ describe('AnthropicProvider', () => {
         maxTokens: 128,
         effort: 'low',
         reasoning: 'on',
+        system: null,
         tools: [{ name: 'web_search', description: 'Busca.', inputSchema: { type: 'object' } }],
         messages: [
           { role: 'user', parts: [{ type: 'text', text: 'cobre hoje?' }] },
@@ -162,6 +165,7 @@ describe('AnthropicProvider', () => {
             maxTokens: 64,
             effort: 'low',
             reasoning: 'off',
+            system: null,
             tools: [],
             messages: [{ role: 'user', parts: [{ type: 'text', text: 'oi' }] }],
           },

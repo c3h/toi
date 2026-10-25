@@ -97,6 +97,12 @@ export const brokenToolCallError = (): AppError =>
 export const missingAttachmentError = (): AppError =>
   new AppError('storage_failed', 'Um anexo desta conversa não está mais no navegador.');
 
+/** As Instruções não foram lidas; a requisição não sai sem elas. */
+export const unreadableInstructionsError = (cause: unknown): AppError =>
+  new AppError('storage_failed', 'Não foi possível ler as Instruções salvas no navegador.', {
+    cause,
+  });
+
 export interface AppErrorInfo {
   code: AppErrorCode;
   message: string;

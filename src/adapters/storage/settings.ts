@@ -21,6 +21,7 @@ const LAST_EFFORT_KEY = 'lastEffort';
 const MODEL_PICKS_KEY = 'modelPicks';
 const TOOL_SPACE_KEY = 'toolSpace';
 const TITLE_MODEL_KEY = 'titleModel';
+const INSTRUCTIONS_KEY = 'instructions';
 
 export class DexieSettingsStore implements SettingsStore {
   readonly #db: ToiDatabase;
@@ -81,6 +82,16 @@ export class DexieSettingsStore implements SettingsStore {
 
   async saveTitleModel(model: ModelRef): Promise<void> {
     await this.#db.settings.put({ key: TITLE_MODEL_KEY, value: toModelRefRecord(model) });
+  }
+
+  async instructions(): Promise<string | null> {
+    const row = await this.#db.settings.get(INSTRUCTIONS_KEY);
+    return row ? (row.value as string) : null;
+  }
+
+  async saveInstructions(text: string | null): Promise<void> {
+    if (text === null) await this.#db.settings.delete(INSTRUCTIONS_KEY);
+    else await this.#db.settings.put({ key: INSTRUCTIONS_KEY, value: text });
   }
 
   async clear(): Promise<void> {

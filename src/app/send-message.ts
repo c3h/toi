@@ -7,6 +7,7 @@ import {
   isAbortError,
   toErrorInfo,
   truncatedError,
+  unreadableInstructionsError,
   type AppErrorInfo,
 } from '../domain/error';
 import type { ConversationId, MessageId } from '../domain/ids';
@@ -43,8 +44,11 @@ const DEFAULT_FLUSH_INTERVAL_MS = 300;
 
 export interface RunDeps {
   store: ConversationStore;
-  /** Lembra o Modelo e o Esforço do envio como default de uma Conversa nova e lê o espaço das Ferramentas. */
-  settings: Pick<SettingsStore, 'saveLastModel' | 'saveLastEffort' | 'toolSpace'>;
+  /**
+   * Lembra o Modelo e o Esforço do envio como default de uma Conversa nova e
+   * lê o espaço das Ferramentas e as Instruções.
+   */
+  settings: Pick<SettingsStore, 'saveLastModel' | 'saveLastEffort' | 'toolSpace' | 'instructions'>;
   provider: ChatProvider;
   /** O Serviço das Ferramentas; `null` sem Chave, e então o envio não oferece Ferramentas. */
   tools: WebTools | null;
@@ -135,10 +139,11 @@ const dateOf = (now: number): string => {
 /**
  * Uma resposta é uma ou mais Rodadas. Cada Rodada é uma requisição com o
  * prefixo do turno, montado uma vez (a `signature` do raciocínio o amarra),
- * mais as Rodadas já fechadas. Uma Rodada que termina pedindo Ferramenta
- * executa as chamadas e abre a próxima; a que termina por outro motivo é o
- * término lógico da Mensagem (`settled`): depois dele, erro ou abort não
- * reabrem a Mensagem.
+ * mais as Rodadas já fechadas. As Instruções são lidas junto com o prefixo:
+ * salvar outras no meio da resposta vale a partir do próximo envio. Uma
+ * Rodada que termina pedindo Ferramenta executa as chamadas e abre a próxima;
+ * a que termina por outro motivo é o término lógico da Mensagem (`settled`):
+ * depois dele, erro ou abort não reabrem a Mensagem.
  */
 const runAssistant = async (
   deps: RunDeps,
@@ -166,15 +171,21 @@ const runAssistant = async (
   try {
     const language = searchLanguageOf(deps.locale);
     const tools = deps.tools;
-    // Sem conseguir ler a escolha (armazenamento bloqueado), o envio segue com o padrão.
-    const toolSpace =
-      tools === null ? null : await readToolSpace(deps.settings).catch(() => DEFAULT_TOOL_SPACE);
+    const [toolSpace, instructions] = await Promise.all([
+      // Sem conseguir ler a escolha (armazenamento bloqueado), o envio segue com o padrão.
+      tools === null ? null : readToolSpace(deps.settings).catch(() => DEFAULT_TOOL_SPACE),
+      // Sem as Instruções, não: responder sem elas mudaria o pedido da pessoa em silêncio.
+      deps.settings.instructions().catch((cause: unknown) => {
+        throw unreadableInstructionsError(cause);
+      }),
+    ]);
     const selected = selectHistory({
       messages: history,
       model,
       effort,
       estimator: deps.estimator,
       toolSpace,
+      instructions,
     });
     truncated = selected.truncated;
 

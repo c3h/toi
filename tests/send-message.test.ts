@@ -17,6 +17,7 @@ import {
   expectCachedPrefix,
   gatedProvider,
   imageFile,
+  MemorySettingsStore,
   MemoryStore,
   replyEvents,
   ScriptedProvider,
@@ -24,6 +25,7 @@ import {
   testModel,
   textEvents,
   textFile,
+  UnreadableInstructions,
   usage,
 } from './helpers';
 
@@ -75,6 +77,7 @@ describe('sendMessage', () => {
       maxTokens: 8_192,
       effort: 'low',
       reasoning: 'on',
+      system: null,
       messages: [{ role: 'user', parts: [{ type: 'text', text: 'Pergunta' }] }],
       tools: [],
     });
@@ -345,5 +348,77 @@ describe('cache de prompt', () => {
     await sendMessage(run, ask({ text: 'E depois?' }));
 
     await expectCachedPrefix(provider.requests[0]!, provider.requests[1]!);
+  });
+});
+
+describe('Instruções', () => {
+  it('vão em system no envio, e tentar de novo usa as gravadas na hora', async () => {
+    const { deps } = await baseDeps();
+    const settings = new MemorySettingsStore();
+    await settings.saveInstructions('responda curto');
+    const provider = new ScriptedProvider(successEvents());
+    const run = { ...deps, settings, tools: null, provider };
+
+    const first = await sendMessage(run, ask());
+    await settings.saveInstructions('responda em inglês');
+    await retryMessage(run, {
+      conversationId: 'c1',
+      messageId: first.message.id,
+      model: testModel,
+      effort: 'low',
+      signal: new AbortController().signal,
+    });
+
+    expect(provider.requests.map(({ system }) => system)).toEqual([
+      'responda curto',
+      'responda em inglês',
+    ]);
+  });
+
+  it('sem conseguir lê-las, a resposta falha com storage_failed sem chegar à rede', async () => {
+    const { store, deps } = await baseDeps();
+    const provider = new ScriptedProvider(successEvents());
+
+    const { message } = await sendMessage(
+      { ...deps, settings: new UnreadableInstructions(), tools: null, provider },
+      ask(),
+    );
+
+    expect(message.status).toBe('failed');
+    expect(message.error).toMatchObject({
+      code: 'storage_failed',
+      message: 'Não foi possível ler as Instruções salvas no navegador.',
+    });
+    expect(provider.requests).toEqual([]);
+    expect((await store.listMessages('c1')).map(({ status }) => status)).toEqual([
+      'complete',
+      'failed',
+    ]);
+  });
+
+  it('parar enquanto elas são lidas fecha em interrupted sem chegar à rede', async () => {
+    const reading = deferred();
+    const release = deferred();
+    class SlowSettings extends MemorySettingsStore {
+      override async instructions(): Promise<string | null> {
+        reading.resolve();
+        await release.promise;
+        return 'responda curto';
+      }
+    }
+    const { deps } = await baseDeps();
+    const provider = new ScriptedProvider(successEvents());
+    const controller = new AbortController();
+
+    const run = await startSendMessage(
+      { ...deps, settings: new SlowSettings(), tools: null, provider },
+      ask({ signal: controller.signal }),
+    );
+    await reading.promise;
+    controller.abort();
+    release.resolve();
+
+    expect((await run.result).message.status).toBe('interrupted');
+    expect(provider.requests).toEqual([]);
   });
 });

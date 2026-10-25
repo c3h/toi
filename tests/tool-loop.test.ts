@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { startSendMessage, type RunDeps, type SendOptions } from '../src/app/send-message';
 import { MAX_ROUNDS } from '../src/app/web-tools';
 import { appError } from '../src/domain/error';
+import type { Message } from '../src/domain/message';
 import type { StreamEvent } from '../src/domain/stream';
 import { WEB_FETCH, WEB_SEARCH } from '../src/domain/web';
 import {
@@ -39,6 +40,10 @@ const narrating = (callId = 't1', query = 'cobre'): StreamEvent[] =>
     [...textEvents('Vou buscar.\n\n'), ...toolCall(1, callId, WEB_SEARCH, JSON.stringify({ query }))],
     'tool_use',
   );
+
+/** O código de erro de cada `tool_result`, na ordem; `null` no que deu certo. */
+const resultErrors = (message: Message) =>
+  message.parts.flatMap((part) => (part.type === 'tool_result' ? [part.error?.code ?? null] : []));
 
 const send = async (deps: RunDeps, overrides: Partial<SendOptions> = {}) =>
   (await startSendMessage(deps, { ...sendInput(), signal: new AbortController().signal, ...overrides }))
@@ -122,10 +127,7 @@ describe('laço de Rodadas', () => {
 
     const { message } = await send(run);
 
-    const errors = message.parts.flatMap((part) =>
-      part.type === 'tool_result' ? [part.error?.code ?? null] : [],
-    );
-    expect(errors).toEqual([null, 'tool_url_not_eligible', null]);
+    expect(resultErrors(message)).toEqual([null, 'tool_url_not_eligible', null]);
     expect(tools.fetches).toEqual([[url]]);
   });
 
@@ -144,10 +146,7 @@ describe('laço de Rodadas', () => {
     );
 
     expect(tools.searches).toHaveLength(1);
-    const errors = message.parts.flatMap((part) =>
-      part.type === 'tool_result' ? [part.error?.code ?? null] : [],
-    );
-    expect(errors).toEqual([null, 'tool_call_limit']);
+    expect(resultErrors(message)).toEqual([null, 'tool_call_limit']);
     expect(message.status).toBe('complete');
   });
 
@@ -287,5 +286,37 @@ describe('laço de Rodadas', () => {
     expect(message.status).toBe('interrupted');
     expect(message.error).toBeNull();
     expect(message.parts.map((part) => part.type)).toEqual(['reasoning', 'tool_call']);
+  });
+
+  it('as Instruções lidas no envio valem para todas as Rodadas, mesmo salvas outras no meio', async () => {
+    const { run, tools, provider } = await setup([searching(), answering()]);
+    const settings = new MemorySettingsStore();
+    await settings.saveInstructions('responda curto');
+    tools.searchAnswer = async () => {
+      await settings.saveInstructions('responda longo');
+      return { hits: [hit('https://a.com/cobre')] };
+    };
+
+    await send({ ...run, settings });
+
+    expect(provider.requests.map(({ system }) => system)).toEqual([
+      'responda curto',
+      'responda curto',
+    ]);
+  });
+
+  it('URL escrita só nas Instruções não autoriza Leitura', async () => {
+    const url = 'https://meu.site/perfil';
+    const { run, tools } = await setup([
+      round(toolCall(0, 't1', WEB_FETCH, JSON.stringify({ urls: [url] })), 'tool_use'),
+      answering(),
+    ]);
+    const settings = new MemorySettingsStore();
+    await settings.saveInstructions(`meu site: ${url}`);
+
+    const { message } = await send({ ...run, settings });
+
+    expect(resultErrors(message)).toEqual(['tool_url_not_eligible']);
+    expect(tools.fetches).toEqual([]);
   });
 });

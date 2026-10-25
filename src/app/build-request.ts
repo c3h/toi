@@ -45,6 +45,8 @@ export interface SelectedHistory {
   effort: Effort;
   /** O espaço das Rodadas que saiu do orçamento; `null` sem Ferramentas. */
   toolSpace: number | null;
+  /** Vão em `system`, já descontadas do orçamento; `null` sem elas. */
+  instructions: string | null;
   /** Já na forma da API: cada Rodada de uma resposta antiga vira uma ida e uma volta. */
   messages: SelectedMessage[];
   truncated: Truncation | null;
@@ -61,6 +63,8 @@ export interface SelectHistoryInput {
    * respostas do mesmo Provedor voltam, e o espaço sai do orçamento.
    */
   toolSpace: number | null;
+  /** As Instruções da pessoa, que toda Rodada reenvia; `null` sem elas. */
+  instructions: string | null;
 }
 
 /**
@@ -314,7 +318,8 @@ const elideOlder = (
  * Escolhe o que vai ao Provedor: normaliza papéis, tira Anexos e resultados
  * antigos que passam dos tetos da API e, se os tokens ainda passam do
  * orçamento, corta turnos do meio. O corte é por turno da pessoa, antes de
- * desdobrar as Rodadas, para uma Rodada nunca ficar pela metade. Não lê
+ * desdobrar as Rodadas, para uma Rodada nunca ficar pela metade. As
+ * Instruções nunca são cortadas: saem do orçamento antes do histórico. Não lê
  * bytes; `toChatRequest` lê só os Anexos que ficaram.
  */
 export const selectHistory = ({
@@ -323,6 +328,7 @@ export const selectHistory = ({
   effort,
   estimator,
   toolSpace,
+  instructions,
 }: SelectHistoryInput): SelectedHistory => {
   const tools = toolSpace !== null;
   const candidates: SelectedMessage[] = messages
@@ -354,7 +360,8 @@ export const selectHistory = ({
   // sem passar da metade, para o histórico nunca ficar sem lugar.
   const contextBudget = Math.floor(maxInputTokens * CONTEXT_BUDGET);
   const space = toolSpace === null ? null : Math.min(toolSpace, Math.floor(contextBudget / 2));
-  const budget = Math.max(1, contextBudget - (space ?? 0));
+  const instructionTokens = instructions === null ? 0 : estimator.estimate(instructions);
+  const budget = Math.max(1, contextBudget - (space ?? 0) - instructionTokens);
 
   const { turns, attachments, results } = elideOlder(
     toTurns(normalized),
@@ -387,6 +394,7 @@ export const selectHistory = ({
     maxTokens,
     effort,
     toolSpace: space,
+    instructions,
     messages: unfold(selected),
     truncated:
       cutTurns || attachments || results ? { turns: cutTurns, attachments, results } : null,
@@ -410,6 +418,7 @@ export const toChatRequest = async (
     maxTokens: selected.maxTokens,
     effort: selected.effort,
     reasoning: 'on',
+    system: selected.instructions,
     tools,
     messages: selected.messages.map((message) => ({
       role: message.role,
