@@ -25,26 +25,39 @@ import {
   usage,
 } from '../helpers';
 
-/** Com `tools`, a Chave do Serviço já está gravada e as Ferramentas respondem por ele. */
+interface MountOptions {
+  store?: MemoryStore;
+  /** A Chave do Serviço já está gravada e as Ferramentas respondem por ele. */
+  tools?: FakeWebTools;
+  settings?: MemorySettingsStore;
+  /** A Chave do Provedor já está gravada: o App abre conectado, sem onboarding. */
+  connected?: boolean;
+}
+
 const mount = async (
   createProvider: (key: string) => ChatProvider,
-  store = new MemoryStore(),
-  tools: FakeWebTools | null = null,
+  {
+    store = new MemoryStore(),
+    tools,
+    settings = new MemorySettingsStore(),
+    connected = false,
+  }: MountOptions = {},
 ) => {
   sessionStorage.clear();
   let next = 0;
   const credentials = new MemoryCredentialStore();
   if (tools) await credentials.set('tinyfish', 'tf-test');
+  if (connected) await credentials.set('anthropic', 'sk-test');
   const toi = await createToi({
     store,
     credentials,
-    settings: new MemorySettingsStore(),
+    settings,
     clock: { now: () => Date.now() },
     estimator: { estimate: () => 1, estimateAttachment: () => 1 },
     newId: () => `id-${(next += 1)}`,
     locks: new MemoryLocks(),
     providers: providersOf(createProvider),
-    services: [{ info: tinyfishInfo, create: () => tools ?? new FakeWebTools() }],
+    service: { info: tinyfishInfo, create: () => tools ?? new FakeWebTools() },
     locale: 'pt-BR',
   });
   return render(<App toi={toi} />);
@@ -104,7 +117,7 @@ describe('App', () => {
       }
       yield { type: 'finished' };
     });
-    const screen = await mount(() => provider, new MemoryStore(), tools);
+    const screen = await mount(() => provider, { tools });
     await connect(screen);
 
     await userEvent.fill(screen.getByLabelText('mensagem'), 'Cobre hoje?');
@@ -120,11 +133,9 @@ describe('App', () => {
   });
 
   it('o espaço da busca começa no padrão e guarda a escolha', async () => {
-    const screen = await mount(
-      () => new ScriptedProvider(replyEvents()),
-      new MemoryStore(),
-      new FakeWebTools(),
-    );
+    const screen = await mount(() => new ScriptedProvider(replyEvents()), {
+      tools: new FakeWebTools(),
+    });
     await connect(screen);
 
     await userEvent.click(screen.getByRole('button', { name: /configurações/ }));
@@ -345,7 +356,9 @@ describe('App: Anexos', () => {
         throw appError('storage_full');
       }
     }
-    const screen = await mount(() => new ScriptedProvider(replyEvents()), new FullStore());
+    const screen = await mount(() => new ScriptedProvider(replyEvents()), {
+      store: new FullStore(),
+    });
     await connect(screen);
 
     await userEvent.upload(filePicker(screen), new File(['abc'], 'dados.csv'));

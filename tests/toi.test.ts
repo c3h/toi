@@ -24,8 +24,10 @@ import {
   ScriptedProvider,
   sendInput,
   testModel,
-  usage,
 } from './helpers';
+
+/** Nenhum destes testes desiste de validar uma Chave. */
+const signal = new AbortController().signal;
 
 const setup = async () => {
   const { store, clock, deps: flow } = flowDeps();
@@ -37,7 +39,7 @@ const setup = async () => {
     credentials,
     settings,
     providers: providersOf(() => new ScriptedProvider([])),
-    services: [],
+    service: { info: tinyfishInfo, create: () => new FakeWebTools() },
   };
 
   return { store, credentials, settings, clock, deps };
@@ -101,17 +103,17 @@ describe('createToi', () => {
         return tools;
       },
     };
-    const toi = await createToi({ ...deps, services: [service] });
-    expect(toi.serviceConnected('tinyfish')).toBe(false);
+    const toi = await createToi({ ...deps, service });
+    expect(toi.serviceConnected()).toBe(false);
 
-    await toi.connectService('tinyfish', '  tf-good  ');
-    await expect(toi.connectService('tinyfish', 'tf-bad')).rejects.toMatchObject({
+    await toi.connectService('  tf-good  ', signal);
+    await expect(toi.connectService('tf-bad', signal)).rejects.toMatchObject({
       code: 'tool_invalid_credential',
     });
 
     expect(created).toEqual(['tf-good', 'tf-bad']);
     expect(await credentials.get('tinyfish')).toBe('tf-good');
-    expect(toi.serviceConnected('tinyfish')).toBe(true);
+    expect(toi.serviceConnected()).toBe(true);
   });
 
   it('desistir durante a validação da Chave do Serviço não a grava', async () => {
@@ -126,41 +128,39 @@ describe('createToi', () => {
         return tools;
       },
     };
-    const toi = await createToi({ ...deps, services: [service] });
+    const toi = await createToi({ ...deps, service });
 
-    await expect(toi.connectService('tinyfish', 'tf-key', controller.signal)).rejects.toMatchObject({
+    await expect(toi.connectService('tf-key', controller.signal)).rejects.toMatchObject({
       name: 'AbortError',
     });
 
     expect(await credentials.get('tinyfish')).toBeNull();
-    expect(toi.serviceConnected('tinyfish')).toBe(false);
+    expect(toi.serviceConnected()).toBe(false);
   });
 
   it('carrega a Chave do Serviço na abertura e apagar tudo a remove', async () => {
     const { credentials, deps } = await setup();
     await credentials.set('tinyfish', 'tf-key');
-    const service: ServiceAdapter = { info: tinyfishInfo, create: () => new FakeWebTools() };
 
-    const toi = await createToi({ ...deps, services: [service] });
-    expect(toi.serviceConnected('tinyfish')).toBe(true);
+    const toi = await createToi(deps);
+    expect(toi.serviceConnected()).toBe(true);
 
     await toi.eraseAll();
 
     expect(await credentials.get('tinyfish')).toBeNull();
-    expect(toi.serviceConnected('tinyfish')).toBe(false);
+    expect(toi.serviceConnected()).toBe(false);
   });
 
   it('remover a Chave do Serviço desconecta só ele', async () => {
     const { credentials, deps } = await setup();
     await credentials.set('anthropic', 'sk-test');
     await credentials.set('tinyfish', 'tf-key');
-    const service: ServiceAdapter = { info: tinyfishInfo, create: () => new FakeWebTools() };
-    const toi = await createToi({ ...deps, services: [service] });
+    const toi = await createToi(deps);
 
-    await toi.disconnectService('tinyfish');
+    await toi.disconnectService();
 
     expect(await credentials.get('tinyfish')).toBeNull();
-    expect(toi.serviceConnected('tinyfish')).toBe(false);
+    expect(toi.serviceConnected()).toBe(false);
     expect(toi.connected()).toBe(true);
   });
 
@@ -351,13 +351,7 @@ describe('createToi', () => {
         listModels: async () => [testModel, haiku],
         async *stream(request) {
           requests.push(request);
-          if (request.reasoning === 'on') {
-            yield* answer();
-            return;
-          }
-          yield { type: 'delta', index: 0, part: 'text', text: title };
-          yield { type: 'usage', usage: usage(1, 1), stopReason: 'end_turn' };
-          yield { type: 'finished' };
+          yield* request.reasoning === 'on' ? answer() : replyEvents(title);
         },
       };
       return { provider, titleRequests: () => requests.filter((r) => r.reasoning === 'off') };
@@ -391,7 +385,8 @@ describe('createToi', () => {
     it('só a primeira resposta conta: tentar de novo e o segundo envio não nomeiam', async () => {
       let fail = true;
       const { provider, titleRequests } = titling(() =>
-        fail ? replyEvents().slice(0, 2) : replyEvents(),
+        // Sem `finished`, o Fluxo fecha `failed`.
+        fail ? replyEvents().slice(0, -1) : replyEvents(),
       );
       const { store, toi } = await connected(provider);
       await store.putConversation(makeConversation('c1'));

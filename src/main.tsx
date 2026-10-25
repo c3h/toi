@@ -30,7 +30,7 @@ const boot = async (): Promise<void> => {
     newId,
     locks: new WebLocks(navigator.locks),
     providers: [anthropic],
-    services: [tinyfish],
+    service: tinyfish,
     locale: navigator.language,
   });
 

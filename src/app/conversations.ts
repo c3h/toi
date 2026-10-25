@@ -65,10 +65,3 @@ export const changeEffort = (
   effort: Effort,
 ): Promise<Conversation | null> =>
   deps.store.updateConversation(id, (conversation) => ({ ...conversation, effort }));
-
-export const deleteConversation = async (
-  deps: ConversationDeps,
-  id: ConversationId,
-): Promise<void> => {
-  await deps.store.deleteConversation(id);
-};
