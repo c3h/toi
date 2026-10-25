@@ -122,6 +122,18 @@ body {
   }
 }
 
+/* Mensagem longe da tela não faz layout nem pinta (docs/architecture.md §9). Até aparecer pela primeira vez reserva a altura média medida do papel; depois, a que teve (`auto`). A média, acima da mediana, faz o fim encolher no caminho de "ir para o fim", e a rolagem para nele, não antes. */
+.message {
+  content-visibility: auto;
+  contain-intrinsic-size: auto 4.125rem;
+  /* O anel de foco passa da borda (`outline-offset`); a contenção de pintura o cortaria. */
+  overflow-clip-margin: 0.5rem;
+}
+
+.message-reply {
+  contain-intrinsic-size: auto 32.5rem;
+}
+
 /* Cursor do Fluxo, só com a resposta esperando o Provedor (ui/use-reveal.ts): fica no fim do último elemento (em lista, do último item), não numa linha própria. */
 .prose-reply > * + .caret {
   display: none;

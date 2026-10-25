@@ -1,5 +1,15 @@
 import { Menu } from 'lucide-react';
-import { lazy, Suspense, useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
+import {
+  lazy,
+  Suspense,
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ReactNode,
+} from 'react';
 import type { RunResult } from '../app/send-message';
 import type { Toi } from '../app/toi';
 import type { AttachmentUpload } from '../domain/attachment';
@@ -130,11 +140,18 @@ export const App = ({ toi }: { toi: Toi }) => {
   }, [conversations, selected, conversation, select]);
 
   const list = models.list;
-  const options = pickedModels(list, modelPicks);
+  const options = useMemo(() => pickedModels(list, modelPicks), [list, modelPicks]);
   const model =
     findModel(list, refFrom(conversation)) ??
     defaultModel(options, lastModel);
   const effort = conversation ? conversation.effort : (lastEffort ?? DEFAULT_EFFORT);
+
+  // Os handlers que descem ao Chat têm identidade estável, para o `memo` das Mensagens e dos
+  // seletores acertar; o que leem do render vem daqui, atualizado a cada commit.
+  const latest = useRef({ conversation, model, effort });
+  useLayoutEffect(() => {
+    latest.current = { conversation, model, effort };
+  });
 
   // Otimista; se não grava, volta ao que está salvo e diz por quê.
   const changeModelPicks = async (picks: ModelPicks) => {
@@ -149,41 +166,49 @@ export const App = ({ toi }: { toi: Toi }) => {
     }
   };
 
-  const changeModel = async (next: Model) => {
-    setLastModel(refOf(next));
-    if (conversation) await toi.changeModel(conversation.id, refOf(next));
-  };
+  const changeModel = useCallback(
+    (next: Model) => {
+      setLastModel(refOf(next));
+      const { conversation } = latest.current;
+      if (conversation) void toi.changeModel(conversation.id, refOf(next));
+    },
+    [toi],
+  );
 
-  const changeEffort = async (next: Effort) => {
-    setLastEffort(next);
-    if (conversation) await toi.changeEffort(conversation.id, next);
-  };
+  const changeEffort = useCallback(
+    (next: Effort) => {
+      setLastEffort(next);
+      const { conversation } = latest.current;
+      if (conversation) void toi.changeEffort(conversation.id, next);
+    },
+    [toi],
+  );
 
   // O envio grava Modelo e Esforço como default da próxima Conversa; o rascunho já nasce com eles.
-  const remember = (sent: Model, sentEffort: Effort) => {
+  const remember = useCallback((sent: Model, sentEffort: Effort) => {
     setLastModel(refOf(sent));
     setLastEffort(sentEffort);
-  };
+  }, []);
 
-  const run = async (
-    conversationId: ConversationId,
-    start: () => Promise<RunResult>,
-  ): Promise<boolean> => {
-    setRunning(conversationId);
-    setNotice(null);
+  const run = useCallback(
+    async (conversationId: ConversationId, start: () => Promise<RunResult>): Promise<boolean> => {
+      setRunning(conversationId);
+      setNotice(null);
 
-    try {
-      setNotice(noticeFrom(await start()));
-      return true;
-    } catch (cause) {
-      const error = errorInfo(cause);
-      if (error.code === 'not_connected') setConnected(false);
-      setNotice({ kind: 'error', error });
-      return false;
-    } finally {
-      setRunning(null);
-    }
-  };
+      try {
+        setNotice(noticeFrom(await start()));
+        return true;
+      } catch (cause) {
+        const error = errorInfo(cause);
+        if (error.code === 'not_connected') setConnected(false);
+        setNotice({ kind: 'error', error });
+        return false;
+      } finally {
+        setRunning(null);
+      }
+    },
+    [],
+  );
 
   const send = async (text: string, attachments: AttachmentUpload[]): Promise<boolean> => {
     if (!model) return false;
@@ -211,18 +236,25 @@ export const App = ({ toi }: { toi: Toi }) => {
     return run(id, () => toi.flow.send({ conversationId: id, text, attachments, model, effort }));
   };
 
-  const retry = (message: Message) => {
-    if (!model) return;
-    remember(model, effort);
-    void run(message.conversationId, () =>
-      toi.flow.retry({
-        conversationId: message.conversationId,
-        messageId: message.id,
-        model,
-        effort,
-      }),
-    );
-  };
+  const retry = useCallback(
+    (message: Message) => {
+      const { model, effort } = latest.current;
+      if (!model) return;
+      remember(model, effort);
+      void run(message.conversationId, () =>
+        toi.flow.retry({
+          conversationId: message.conversationId,
+          messageId: message.id,
+          model,
+          effort,
+        }),
+      );
+    },
+    [toi, remember, run],
+  );
+
+  const manageModels = useCallback(() => setSettings('modelos'), []);
+  const openSearchSettings = useCallback(() => setSettings('busca'), []);
 
   const remove = async (id: ConversationId) => {
     try {
@@ -414,7 +446,7 @@ export const App = ({ toi }: { toi: Toi }) => {
                 <button
                   type="button"
                   className="text-accent hover:underline"
-                  onClick={() => setSettings('modelos')}
+                  onClick={manageModels}
                 >
                   escolher modelos
                 </button>
@@ -432,14 +464,14 @@ export const App = ({ toi }: { toi: Toi }) => {
                 running={running !== null}
                 notice={notice}
                 noticeAction={noticeAction(notice)}
-                onModelChange={(next) => void changeModel(next)}
-                onEffortChange={(next) => void changeEffort(next)}
-                onManageModels={() => setSettings('modelos')}
+                onModelChange={changeModel}
+                onEffortChange={changeEffort}
+                onManageModels={manageModels}
                 onSend={send}
                 onStop={() => void toi.flow.stop()}
                 onRetry={retry}
                 onDismissNotice={() => setNotice(null)}
-                onOpenSearchSettings={() => setSettings('busca')}
+                onOpenSearchSettings={openSearchSettings}
               />
             )}
           </>

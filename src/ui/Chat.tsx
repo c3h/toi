@@ -165,7 +165,7 @@ const MessageView = memo((props: MessageViewProps) => {
   const attachments = attachmentsOf(props.message);
 
   return (
-    <article className="flex gap-3 text-base text-text">
+    <article className="message flex gap-3 text-base text-text">
       <span className="select-none text-accent" aria-hidden="true">
         &gt;
       </span>
@@ -195,10 +195,7 @@ const Reply = ({
   const tail = segments[closed];
   const live = tail?.kind === 'text' ? tail.text : '';
   const { shown, revealing, waiting, animate } = useReveal(live, message.status, closed);
-  const text = useMemo(
-    () => segments.flatMap((segment) => (segment.kind === 'text' ? [segment.text] : [])).join('\n\n'),
-    [segments],
-  );
+  const text = useMemo(() => textOf(message), [message]);
 
   const name = modelName(message, models);
   const effort = message.effort && effortLabel(message.effort);
@@ -219,7 +216,7 @@ const Reply = ({
   const caret = waiting && (segments.length === 0 || tail !== undefined);
 
   return (
-    <article aria-busy={revealing} className="flex flex-col gap-4">
+    <article aria-busy={revealing} className="message message-reply flex flex-col gap-4">
       {segments.slice(0, closed).map((segment, index) =>
         segment.kind === 'text' ? (
           <Prose key={index} text={segment.text} open={false} />
@@ -302,6 +299,8 @@ export const Chat = ({
   const picker = useRef<HTMLInputElement>(null);
   const scroller = useRef<HTMLDivElement>(null);
   const following = useRef(true);
+  // "Ir para o fim" em curso: segue até o fim, mesmo que ele ande no caminho.
+  const heading = useRef(false);
   const [atBottom, setAtBottom] = useState(true);
   const input = useRef<HTMLTextAreaElement>(null);
 
@@ -319,6 +318,19 @@ export const Chat = ({
     observer.observe(content);
     return () => observer.disconnect();
   }, []);
+
+  // Mensagem que aparece pela primeira vez no caminho troca a altura reservada pela real
+  // (`content-visibility`) e o fim anda; cada `scrollend` antes dele rola de novo.
+  const scrollToEnd = (element: HTMLDivElement) => {
+    following.current = true;
+    heading.current = true;
+    element.scrollTo({ top: element.scrollHeight, behavior: 'smooth' });
+  };
+
+  // Rolar por conta própria no meio do caminho desiste do fim.
+  const stopHeading = () => {
+    heading.current = false;
+  };
 
   useLayoutEffect(() => {
     const element = input.current;
@@ -382,6 +394,14 @@ export const Chat = ({
           following.current = nearBottom(event.currentTarget);
           setAtBottom(following.current);
         }}
+        onScrollEnd={(event) => {
+          if (!heading.current) return;
+          if (nearBottom(event.currentTarget)) heading.current = false;
+          else scrollToEnd(event.currentTarget);
+        }}
+        onWheel={stopHeading}
+        onPointerDown={stopHeading}
+        onKeyDown={stopHeading}
       >
         {messages.length === 0 ? (
           <div className="mx-auto flex h-full max-w-[44rem] flex-col justify-center pb-16">
@@ -431,9 +451,7 @@ export const Chat = ({
             className="absolute -top-12 left-1/2 z-10 grid size-8 -translate-x-1/2 place-items-center border border-line bg-panel text-muted transition-colors hover:border-subtle hover:text-text"
             onClick={() => {
               const element = scroller.current;
-              if (!element) return;
-              following.current = true;
-              element.scrollTo({ top: element.scrollHeight, behavior: 'smooth' });
+              if (element) scrollToEnd(element);
             }}
           >
             <ArrowDown size={15} aria-hidden />
