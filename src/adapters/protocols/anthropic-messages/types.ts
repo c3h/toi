@@ -5,7 +5,7 @@ export interface AnthropicUsage {
   cache_read_input_tokens?: number | null;
 }
 
-export interface MessageStartEvent {
+interface MessageStartEvent {
   type: 'message_start';
   message: {
     model: string;
@@ -38,12 +38,12 @@ export interface ContentBlockDeltaEvent {
   };
 }
 
-export interface ContentBlockStopEvent {
+interface ContentBlockStopEvent {
   type: 'content_block_stop';
   index: number;
 }
 
-export interface MessageDeltaEvent {
+interface MessageDeltaEvent {
   type: 'message_delta';
   delta: {
     stop_reason?: string | null;
@@ -51,15 +51,15 @@ export interface MessageDeltaEvent {
   usage?: AnthropicUsage;
 }
 
-export interface MessageStopEvent {
+interface MessageStopEvent {
   type: 'message_stop';
 }
 
-export interface PingEvent {
+interface PingEvent {
   type: 'ping';
 }
 
-export interface ErrorEvent {
+interface ErrorEvent {
   type: 'error';
   error: {
     type: string;
