@@ -24,7 +24,7 @@ export interface ConversationRecord {
   updatedAt: number;
 }
 
-export type AttachmentRecord =
+type AttachmentRecord =
   | {
       id: string;
       kind: 'image';
@@ -159,10 +159,12 @@ const toErrorRecord = (error: AppErrorInfo): ErrorRecord => ({
   retryAfterSeconds: error.retryAfterSeconds,
 });
 
-const fromErrorRecord = (record: ErrorRecord): AppErrorInfo => ({ ...record });
-
-/** Cópia do JSON: o registro não compartilha objeto com o domínio. */
-const copyJson = (value: JsonObject): JsonObject => structuredClone(value);
+const fromErrorRecord = (record: ErrorRecord): AppErrorInfo => ({
+  code: record.code,
+  message: record.message,
+  detail: record.detail,
+  retryAfterSeconds: record.retryAfterSeconds,
+});
 
 const toPartRecord = (part: Part): PartRecord => {
   switch (part.type) {
@@ -175,7 +177,8 @@ const toPartRecord = (part: Part): PartRecord => {
     case 'file':
       return { type: 'file', attachment: toAttachmentRecord(part.attachment) };
     case 'tool_call':
-      return { type: 'tool_call', callId: part.callId, tool: part.tool, input: copyJson(part.input) };
+      // Sem cópia: o IndexedDB clona o registro ao gravar e entrega um novo a cada leitura.
+      return { type: 'tool_call', callId: part.callId, tool: part.tool, input: part.input };
     case 'tool_result':
       return {
         type: 'tool_result',
@@ -199,12 +202,7 @@ const fromPartRecord = (record: PartRecord): Part => {
     case 'file':
       return { type: 'file', attachment: fromAttachmentRecord(record.attachment) };
     case 'tool_call':
-      return {
-        type: 'tool_call',
-        callId: record.callId,
-        tool: record.tool,
-        input: copyJson(record.input),
-      };
+      return { type: 'tool_call', callId: record.callId, tool: record.tool, input: record.input };
     case 'tool_result':
       return {
         type: 'tool_result',
@@ -253,7 +251,12 @@ export const fromMessageRecord = (record: MessageRecord): Message => ({
   provider: record.provider,
   model: record.model,
   effort: record.effort,
-  usage: record.usage && { ...record.usage },
+  usage: record.usage && {
+    inputTokens: record.usage.inputTokens,
+    outputTokens: record.usage.outputTokens,
+    cacheCreationInputTokens: record.usage.cacheCreationInputTokens,
+    cacheReadInputTokens: record.usage.cacheReadInputTokens,
+  },
   stopReason: record.stopReason,
   error: record.error && fromErrorRecord(record.error),
 });

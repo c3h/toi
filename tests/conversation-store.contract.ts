@@ -319,9 +319,14 @@ export const describeConversationStore = (
           });
         }
 
+        await store.putMessage(
+          makeMessage({ id: 'm1b', conversationId: 'c1', seq: 2, role: 'assistant' }),
+        );
+
         await store.deleteConversation('c1');
 
         expect(await store.getConversation('c1')).toBeNull();
+        expect(await store.getMessage('m1b')).toBeNull();
         expect(await store.listMessages('c1')).toEqual([]);
         await expect(store.readAttachments(['m1-a'])).rejects.toMatchObject({
           code: 'storage_failed',
