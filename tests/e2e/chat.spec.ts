@@ -6,6 +6,15 @@ test('envia e vê a resposta em Markdown', async ({ page }) => {
   await setMock(page, { reply: 'Resposta com **ênfase** e `código`.', deltas: 8, delayMs: 20 });
 
   await send(page, 'Primeira pergunta');
+  // O pedido da Mensagem entre os que saíram: o do Título, quando há, leva outro texto.
+  await expect
+    .poll(() => page.evaluate(() => window.__bodies.map((body): unknown => JSON.parse(body))))
+    .toContainEqual(
+      expect.objectContaining({
+        cache_control: { type: 'ephemeral' },
+        messages: [{ role: 'user', content: [{ type: 'text', text: 'Primeira pergunta' }] }],
+      }),
+    );
 
   await expect(page.locator('strong', { hasText: 'ênfase' })).toBeVisible();
   await expect(page.getByTitle('12 tokens de entrada, 8 de saída')).toBeVisible();
@@ -77,17 +86,28 @@ test('duas abas: a segunda vê o Fluxo da primeira e não escreve ao mesmo tempo
 
 test('ir para o fim aparece só fora do fim e leva de volta', async ({ page }) => {
   await connect(page);
-  const reply = Array.from({ length: 60 }, (_, index) => `Parágrafo ${index}.`).join('\n\n');
-  await setMock(page, { reply, deltas: 1 });
-  await send(page, 'Resposta longa');
-  const last = page.getByText('Parágrafo 59.');
+  // Respostas mais altas que a reserva de `content-visibility`, e tantas que o meio não
+  // aparece ao abrir.
+  for (let reply = 0; reply < 12; reply += 1) {
+    const paragraphs = Array.from(
+      { length: 20 },
+      (_, index) => `Resposta ${reply}, parágrafo ${index}.`,
+    );
+    await setMock(page, { reply: paragraphs.join('\n\n'), deltas: 1 });
+    await send(page, `Pergunta ${reply}`);
+    await expect(page.getByText(paragraphs.at(-1)!, { exact: true })).toBeInViewport();
+  }
+  // Recarregada, a Conversa abre no fim e as Mensagens do meio reservam a altura média, não a
+  // real.
+  await page.reload();
+  const last = page.getByText('Resposta 11, parágrafo 19.', { exact: true });
   await expect(last).toBeInViewport();
 
   const toEnd = page.getByRole('button', { name: 'ir para o fim' });
   await expect(toEnd).toBeHidden();
 
-  await page.getByText('Parágrafo 0.').hover();
-  await page.mouse.wheel(0, -10_000);
+  // Direto ao topo: o caminho de volta mostra o meio pela primeira vez, e o fim anda.
+  await page.getByText('Resposta 0, parágrafo 0.', { exact: true }).hover();
   await toEnd.click();
 
   await expect(last).toBeInViewport();

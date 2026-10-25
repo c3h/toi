@@ -4,10 +4,12 @@ import { render } from 'vitest-browser-react';
 import { createToi } from '../../src/app/toi';
 import { tinyfishInfo } from '../../src/adapters/services/tinyfish/info';
 import { appError } from '../../src/domain/error';
-import type { Model } from '../../src/domain/model';
+import type { ProviderId } from '../../src/domain/ids';
+import { refOf, type Model } from '../../src/domain/model';
 import type { ChatProvider } from '../../src/ports/chat-provider';
 import { App } from '../../src/ui/App';
 import type { StreamEvent } from '../../src/domain/stream';
+import { WEB_SEARCH } from '../../src/domain/web';
 import {
   deferred,
   FailingProvider,
@@ -22,29 +24,47 @@ import {
   providersOf,
   replyEvents,
   ScriptedProvider,
+  round,
+  testModel,
+  textEvents,
+  toolCall,
+  untilAborted,
   usage,
 } from '../helpers';
 
-/** Com `tools`, a Chave do Serviço já está gravada e as Ferramentas respondem por ele. */
+interface MountOptions {
+  store?: MemoryStore;
+  /** A Chave do Serviço já está gravada e as Ferramentas respondem por ele. */
+  tools?: FakeWebTools;
+  settings?: MemorySettingsStore;
+  /** A Chave do Provedor já está gravada: o App abre conectado, sem onboarding. */
+  connected?: boolean;
+}
+
 const mount = async (
   createProvider: (key: string) => ChatProvider,
-  store = new MemoryStore(),
-  tools: FakeWebTools | null = null,
+  {
+    store = new MemoryStore(),
+    tools,
+    settings = new MemorySettingsStore(),
+    connected = false,
+  }: MountOptions = {},
 ) => {
   sessionStorage.clear();
   let next = 0;
   const credentials = new MemoryCredentialStore();
   if (tools) await credentials.set('tinyfish', 'tf-test');
+  if (connected) await credentials.set('anthropic', 'sk-test');
   const toi = await createToi({
     store,
     credentials,
-    settings: new MemorySettingsStore(),
+    settings,
     clock: { now: () => Date.now() },
     estimator: { estimate: () => 1, estimateAttachment: () => 1 },
     newId: () => `id-${(next += 1)}`,
     locks: new MemoryLocks(),
     providers: providersOf(createProvider),
-    services: [{ info: tinyfishInfo, create: () => tools ?? new FakeWebTools() }],
+    service: { info: tinyfishInfo, create: () => tools ?? new FakeWebTools() },
     locale: 'pt-BR',
   });
   return render(<App toi={toi} />);
@@ -54,6 +74,55 @@ const connect = async (screen: Awaited<ReturnType<typeof render>>, key = 'sk-tes
   await userEvent.fill(screen.getByLabelText('chave da api'), key);
   await userEvent.click(screen.getByRole('button', { name: 'conectar' }));
 };
+
+/** Guarda o `signal` de cada listagem: a primeira volta na hora; as seguintes, só abortadas. */
+class HangingRefresh extends ScriptedProvider {
+  readonly signals: AbortSignal[] = [];
+
+  override async listModels(signal: AbortSignal): Promise<Model[]> {
+    this.signals.push(signal);
+    if (this.signals.length > 1) await untilAborted(signal);
+    return super.listModels(signal);
+  }
+}
+
+type SettingsRead = 'lastModel' | 'lastEffort' | 'models';
+
+/** Uma leitura das Configurações rejeita como o IndexedDB que caiu, até "apagar tudo" as limpar. */
+class FailingSettings extends MemorySettingsStore {
+  #failing: SettingsRead | null;
+
+  constructor(failing: SettingsRead) {
+    super();
+    this.#failing = failing;
+  }
+
+  #check(read: SettingsRead): void {
+    if (read === this.#failing) {
+      throw new DOMException('Connection to Indexed Database server lost.', 'UnknownError');
+    }
+  }
+
+  override async lastModel() {
+    this.#check('lastModel');
+    return super.lastModel();
+  }
+
+  override async lastEffort() {
+    this.#check('lastEffort');
+    return super.lastEffort();
+  }
+
+  override async models(provider: ProviderId) {
+    this.#check('models');
+    return super.models(provider);
+  }
+
+  override async clear() {
+    this.#failing = null;
+    return super.clear();
+  }
+}
 
 describe('App', () => {
   it('mostra o erro tipado e não sai do onboarding com Chave inválida', async () => {
@@ -75,36 +144,44 @@ describe('App', () => {
 
     await expect.element(screen.getByText('Primeira pergunta', { exact: true })).toBeVisible();
     await expect.element(screen.getByText('Olá')).toBeVisible();
-    await expect.element(screen.getByTitle('10 tokens de entrada, 0 de saída')).toBeVisible();
+    await expect.element(screen.getByTitle('10 tokens de entrada, 5 de saída')).toBeVisible();
     await expect.element(screen.getByTitle(/até o modelo responder$/)).toBeVisible();
     await expect
       .element(screen.getByRole('button', { name: 'primeira pergunta', exact: true }))
       .toHaveAttribute('aria-current', 'page');
   });
 
+  it('o rodapé diz quanto da entrada veio do cache', async () => {
+    const cached = { cacheCreationInputTokens: 20, cacheReadInputTokens: 1200 };
+    const screen = await mount(
+      () =>
+        new ScriptedProvider([
+          { type: 'started', model: testModel.id, usage: { ...usage(10, 0), ...cached } },
+          ...textEvents('Olá'),
+          { type: 'usage', usage: { ...usage(10, 5), ...cached }, stopReason: 'end_turn' },
+          { type: 'finished' },
+        ]),
+    );
+    await connect(screen);
+
+    await userEvent.fill(screen.getByLabelText('mensagem'), 'Pergunta');
+    await userEvent.keyboard('{Enter}');
+
+    await expect
+      .element(screen.getByTitle('1.230 tokens de entrada (1.200 do cache), 5 de saída'))
+      .toHaveTextContent('1.230 → 5');
+  });
+
   it('mostra a Busca na resposta e abre as Fontes', async () => {
     const tools = new FakeWebTools();
     tools.searchAnswer = { hits: [hit('https://www.exemplo.com/cobre', 'Cobre hoje')] };
-    let rounds = 0;
-    const provider = new ScriptedProvider(async function* (): AsyncGenerator<StreamEvent> {
-      rounds += 1;
-      yield { type: 'started', model: 'claude-test', usage: usage(10, 0) };
-      if (rounds === 1) {
-        yield {
-          type: 'part_started',
-          index: 0,
-          part: { type: 'tool_call', callId: 't1', tool: 'web_search' },
-        };
-        yield { type: 'delta', index: 0, part: 'input', text: '{"query":"cobre"}' };
-        yield { type: 'part_finished', index: 0 };
-        yield { type: 'usage', usage: usage(10, 3), stopReason: 'tool_use' };
-      } else {
-        yield { type: 'delta', index: 0, part: 'text', text: 'O cobre subiu.' };
-        yield { type: 'usage', usage: usage(10, 4), stopReason: 'end_turn' };
-      }
-      yield { type: 'finished' };
+    const provider = new ScriptedProvider({
+      rounds: [
+        round(toolCall(0, 't1', WEB_SEARCH, '{"query":"cobre"}'), 'tool_use', 3),
+        replyEvents('O cobre subiu.'),
+      ],
     });
-    const screen = await mount(() => provider, new MemoryStore(), tools);
+    const screen = await mount(() => provider, { tools });
     await connect(screen);
 
     await userEvent.fill(screen.getByLabelText('mensagem'), 'Cobre hoje?');
@@ -120,11 +197,9 @@ describe('App', () => {
   });
 
   it('o espaço da busca começa no padrão e guarda a escolha', async () => {
-    const screen = await mount(
-      () => new ScriptedProvider(replyEvents()),
-      new MemoryStore(),
-      new FakeWebTools(),
-    );
+    const screen = await mount(() => new ScriptedProvider(replyEvents()), {
+      tools: new FakeWebTools(),
+    });
     await connect(screen);
 
     await userEvent.click(screen.getByRole('button', { name: /configurações/ }));
@@ -244,6 +319,52 @@ describe('App', () => {
       .toBeVisible();
   });
 
+  it('trocar a Chave aborta a atualização da lista pela anterior, sem erro na tela', async () => {
+    // Conectar lista na hora; a atualização em Configurações fica pendurada até ser abortada.
+    const previous = new HangingRefresh(replyEvents());
+    const sonnet = makeModel('claude-sonnet-5-5', { displayName: 'Claude Sonnet 5.5' });
+    const screen = await mount((key) =>
+      key === 'sk-test' ? previous : new ScriptedProvider(replyEvents(), [sonnet]),
+    );
+    await connect(screen);
+
+    await userEvent.click(screen.getByRole('button', { name: /configurações/ }));
+    await userEvent.click(screen.getByRole('button', { name: 'atualizar lista' }));
+    await expect.element(screen.getByRole('button', { name: 'atualizando…' })).toBeDisabled();
+    await userEvent.click(screen.getByRole('button', { name: 'trocar chave' }));
+    await connect(screen, 'sk-nova');
+
+    await expect.element(screen.getByRole('button', { name: 'atualizar lista' })).toBeEnabled();
+    expect(previous.signals[1]?.aborted).toBe(true);
+    expect(screen.container.textContent).not.toContain('desatualizada');
+  });
+
+  it('entrar em trocar chave e manter a atual deixa a atualização da lista terminar', async () => {
+    const listed = deferred();
+    class GatedListing extends ScriptedProvider {
+      calls = 0;
+
+      override async listModels(signal: AbortSignal): Promise<Model[]> {
+        this.calls += 1;
+        // Conectar lista na hora; a atualização em Configurações espera o teste soltar.
+        if (this.calls > 1) await listed.promise;
+        return super.listModels(signal);
+      }
+    }
+    const screen = await mount(() => new GatedListing(replyEvents()));
+    await connect(screen);
+
+    await userEvent.click(screen.getByRole('button', { name: /configurações/ }));
+    await userEvent.click(screen.getByRole('button', { name: 'atualizar lista' }));
+    await expect.element(screen.getByRole('button', { name: 'atualizando…' })).toBeDisabled();
+    await userEvent.click(screen.getByRole('button', { name: 'trocar chave' }));
+    await userEvent.click(screen.getByRole('button', { name: /manter a chave atual/ }));
+    listed.resolve();
+
+    await expect.element(screen.getByRole('button', { name: 'atualizar lista' })).toBeEnabled();
+    expect(screen.container.textContent).not.toContain('desatualizada');
+  });
+
   it('começa no menor Esforço, envia o escolhido e a Conversa nova herda o do último envio', async () => {
     const provider = new ScriptedProvider(replyEvents());
     const screen = await mount(() => provider);
@@ -278,6 +399,110 @@ describe('App', () => {
     await expect
       .element(screen.getByRole('button', { name: 'modelo: claude opus 5.5' }))
       .toBeVisible();
+  });
+
+  it('abre sem piscar: o seletor só aparece com o cache de Modelos e as escolhas lidos', async () => {
+    const sonnet = makeModel('claude-sonnet-5-5', {
+      displayName: 'Claude Sonnet 5.5',
+      createdAt: '2026-09-01',
+    });
+    const haiku = makeModel('claude-haiku-5-5', {
+      displayName: 'Claude Haiku 5.5',
+      createdAt: '2026-08-01',
+    });
+    const cache = deferred();
+    const saved = deferred();
+    class SlowSettings extends MemorySettingsStore {
+      override async models(provider: ProviderId): Promise<Model[] | null> {
+        await cache.promise;
+        return super.models(provider);
+      }
+
+      override async lastModel() {
+        await saved.promise;
+        return super.lastModel();
+      }
+    }
+    const settings = new SlowSettings();
+    await settings.saveModels('anthropic', [sonnet, haiku]);
+    await settings.saveLastModel(refOf(haiku));
+
+    // Cada estado que a tela mostra, na ordem: a casca, o bloqueio ou o seletor.
+    const shown: string[] = [];
+    const observer = new MutationObserver(() => {
+      const picker = document.querySelector('[aria-label^="modelo:"]');
+      const state = document.body.textContent.includes('nenhum modelo')
+        ? 'bloqueio'
+        : (picker?.getAttribute('aria-label') ?? 'casca');
+      if (shown.at(-1) !== state) shown.push(state);
+    });
+    observer.observe(document.body, { subtree: true, childList: true, characterData: true });
+
+    const screen = await mount(() => new ScriptedProvider(replyEvents(), [sonnet, haiku]), {
+      settings,
+      connected: true,
+    });
+    await expect.element(screen.getByRole('button', { name: /nova conversa/ })).toBeVisible();
+    cache.resolve();
+    // Um frame para a tela mostrar o que tiver com a lista e sem o último Modelo.
+    await new Promise(requestAnimationFrame);
+    saved.resolve();
+
+    await expect
+      .element(screen.getByRole('button', { name: 'modelo: claude haiku 5.5' }))
+      .toBeVisible();
+    observer.disconnect();
+    expect(shown).toEqual(['casca', 'modelo: claude haiku 5.5']);
+  });
+
+  it('sem conseguir ler as escolhas gravadas, diz isso e oferece recarregar', async () => {
+    const screen = await mount(() => new ScriptedProvider(replyEvents()), {
+      settings: new FailingSettings('lastEffort'),
+      connected: true,
+    });
+
+    await expect
+      .element(screen.getByText('não deu para ler as configurações salvas neste navegador.'))
+      .toBeVisible();
+    await expect.element(screen.getByRole('button', { name: 'recarregar' })).toBeVisible();
+    expect(screen.container.querySelector('[aria-label^="modelo:"]')).toBeNull();
+  });
+
+  it('sem conseguir ler o último Modelo, Configurações abrem e apagar tudo recomeça', async () => {
+    const screen = await mount(() => new ScriptedProvider(replyEvents()), {
+      settings: new FailingSettings('lastModel'),
+      connected: true,
+    });
+
+    await userEvent.click(screen.getByRole('button', { name: 'abrir configurações' }));
+    await expect.element(screen.getByRole('button', { name: 'trocar chave' })).toBeVisible();
+    await userEvent.click(screen.getByRole('button', { name: 'apagar tudo' }));
+    await userEvent.click(screen.getByRole('button', { name: 'sim, continuar' }));
+
+    // A tela remonta e relê o armazenamento vazio: a abertura que falhou não volta.
+    await connect(screen);
+    await expect.element(screen.getByRole('button', { name: 'modelo: claude test' })).toBeVisible();
+  });
+
+  it('sem conseguir ler o cache de Modelos, bloqueia a abertura em vez de listar na API', async () => {
+    const provider = new HangingRefresh(replyEvents());
+    const screen = await mount(() => provider, {
+      settings: new FailingSettings('models'),
+      connected: true,
+    });
+
+    await expect
+      .element(screen.getByText('não deu para ler as configurações salvas neste navegador.'))
+      .toBeVisible();
+    expect(provider.signals).toHaveLength(0);
+  });
+
+  it('sem cache de Modelos, a abertura lista na API', async () => {
+    const provider = new HangingRefresh(replyEvents());
+    const screen = await mount(() => provider, { connected: true });
+
+    await expect.element(screen.getByRole('button', { name: 'modelo: claude test' })).toBeVisible();
+    expect(provider.signals).toHaveLength(1);
   });
 });
 
@@ -345,7 +570,9 @@ describe('App: Anexos', () => {
         throw appError('storage_full');
       }
     }
-    const screen = await mount(() => new ScriptedProvider(replyEvents()), new FullStore());
+    const screen = await mount(() => new ScriptedProvider(replyEvents()), {
+      store: new FullStore(),
+    });
     await connect(screen);
 
     await userEvent.upload(filePicker(screen), new File(['abc'], 'dados.csv'));

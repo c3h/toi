@@ -29,7 +29,7 @@ export class ToiDatabase extends Dexie {
     // Pré-produção: mudar a forma em `records.ts` edita esta versão, sem `upgrade()` (AGENTS.md).
     this.version(1).stores({
       conversations: 'id, updatedAt',
-      messages: 'id, conversationId, [conversationId+seq], status',
+      messages: 'id, [conversationId+seq], status',
       attachments: 'id, conversationId',
       settings: 'key',
       credentials: 'provider',

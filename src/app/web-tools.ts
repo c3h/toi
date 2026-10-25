@@ -34,10 +34,10 @@ export const MAX_TOOL_CALLS_PER_TURN = 10;
  */
 export const MAX_ROUNDS = 12;
 /** URLs por Leitura. */
-export const MAX_FETCH_URLS = 3;
+const MAX_FETCH_URLS = 3;
 
 /** Idiomas que a Busca aceita no parâmetro `language`; o do navegador vira o default. */
-export const SEARCH_LANGUAGES = [
+const SEARCH_LANGUAGES = [
   'ar', 'de', 'en', 'es', 'fr', 'hi', 'it', 'ja', 'ko', 'nl', 'pl', 'pt', 'ru', 'sv', 'tr', 'zh',
 ] as const;
 

@@ -18,7 +18,7 @@ import type {
 import { parseRetryAfter, type FetchLike } from '../../http/fetch';
 import { tinyfishInfo } from './info';
 
-export const SEARCH_URL = 'https://api.search.tinyfish.ai';
+const SEARCH_URL = 'https://api.search.tinyfish.ai';
 export const FETCH_URL = 'https://api.fetch.tinyfish.ai';
 
 // Tetos do corpo: uma resposta maior é defeito ou abuso e não chega ao Modelo.

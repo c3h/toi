@@ -1,3 +1,4 @@
+import { expect } from 'vitest';
 import type { Attachment, AttachmentUpload } from '../src/domain/attachment';
 import type { Conversation } from '../src/domain/conversation';
 import { appError, missingAttachmentError } from '../src/domain/error';
@@ -5,10 +6,11 @@ import type { Message, Part } from '../src/domain/message';
 import type { Effort, Model, ModelPicks, ModelRef } from '../src/domain/model';
 import type { CredentialOwner, ProviderId } from '../src/domain/ids';
 import type { StreamEvent } from '../src/domain/stream';
-import { emptyUsage } from '../src/domain/usage';
+import { emptyUsage, type StopReason } from '../src/domain/usage';
 import type { ChatProvider, ChatRequest, ProviderAdapter } from '../src/ports/chat-provider';
 import type { FlowDeps } from '../src/app/flow';
-import type { SendOptions } from '../src/app/send-message';
+import type { RunDeps, SendOptions } from '../src/app/send-message';
+import { toAnthropicPayload } from '../src/adapters/protocols/anthropic-messages/request';
 import { anthropicInfo } from '../src/adapters/providers/anthropic/info';
 import { anthropicFamily } from '../src/adapters/providers/anthropic/models';
 import type { Clock } from '../src/ports/clock';
@@ -373,34 +375,51 @@ export const fixedClock = (start = 10_000): Clock & { set(value: number): void }
 
 type Script = StreamEvent[] | ((signal: AbortSignal) => AsyncIterable<StreamEvent>);
 
+/** Responde cada pedido com um script; `{ rounds }` dá um por pedido, como as Rodadas de uma resposta. */
 export class ScriptedProvider implements ChatProvider {
   readonly requests: ChatRequest[] = [];
-  readonly script: Script;
   readonly models: Model[];
+  /** Script único responde todo pedido; Rodadas, uma por pedido, e pedido fora delas falha. */
+  readonly #scriptFor: (request: number) => Script | undefined;
 
-  constructor(script: Script, models: Model[] = [testModel]) {
-    this.script = script;
+  constructor(script: Script | { rounds: Script[] }, models: Model[] = [testModel]) {
+    this.#scriptFor = 'rounds' in script ? (request) => script.rounds[request] : () => script;
     this.models = models;
   }
 
-  async listModels(): Promise<Model[]> {
+  async listModels(signal: AbortSignal): Promise<Model[]> {
+    signal.throwIfAborted();
     return this.models;
   }
 
   async *stream(request: ChatRequest, signal: AbortSignal): AsyncGenerator<StreamEvent> {
+    const script = this.#scriptFor(this.requests.length);
     this.requests.push(request);
+    if (!script) throw new Error('Rodada fora do script.');
 
-    if (typeof this.script === 'function') {
-      yield* this.script(signal);
+    if (typeof script === 'function') {
+      yield* script(signal);
       return;
     }
 
-    for (const event of this.script) {
+    for (const event of script) {
       if (signal.aborted) throw abortError();
       yield event;
     }
   }
 }
+
+/**
+ * O cache de prompt só acerta se o corpo do pedido anterior volta intacto no
+ * seguinte: os mesmos campos e as mesmas Mensagens no começo, crescendo só no fim.
+ */
+export const expectCachedPrefix = async (before: ChatRequest, after: ChatRequest): Promise<void> => {
+  const { messages: earlier, ...head } = await toAnthropicPayload(before, null);
+  const { messages: later, ...next } = await toAnthropicPayload(after, null);
+  expect(next).toEqual(head);
+  expect(later.slice(0, earlier.length)).toEqual(earlier);
+  expect(later.length).toBeGreaterThan(earlier.length);
+};
 
 /** Recusa a Chave ao listar Modelos. */
 export class FailingProvider extends ScriptedProvider {
@@ -409,12 +428,30 @@ export class FailingProvider extends ScriptedProvider {
   }
 }
 
-/** Resposta mínima que fecha em `complete`. */
-export const replyEvents = (text = 'Olá'): StreamEvent[] => [
+/** Os Eventos de um bloco de texto, como o adaptador os emite. */
+export const textEvents = (text: string, index = 0): StreamEvent[] => [
+  { type: 'part_started', index, part: { type: 'text' } },
+  { type: 'delta', index, part: 'text', text },
+  { type: 'part_finished', index },
+];
+
+/** Os Eventos de uma chamada de Ferramenta, com o input inteiro num delta. */
+export const toolCall = (index: number, callId: string, tool: string, json: string): StreamEvent[] => [
+  { type: 'part_started', index, part: { type: 'tool_call', callId, tool } },
+  { type: 'delta', index, part: 'input', text: json },
+  { type: 'part_finished', index },
+];
+
+/** Uma Rodada inteira em volta dos blocos, do `started` ao `finished`. */
+export const round = (body: StreamEvent[], stopReason: StopReason, output = 5): StreamEvent[] => [
   { type: 'started', model: testModel.id, usage: usage(10, 0) },
-  { type: 'delta', index: 0, part: 'text', text },
+  ...body,
+  { type: 'usage', usage: usage(10, output), stopReason },
   { type: 'finished' },
 ];
+
+/** Resposta mínima que fecha em `complete`. */
+export const replyEvents = (text = 'Olá'): StreamEvent[] => round(textEvents(text), 'end_turn');
 
 /** Uma Promise e quem a resolve, para o teste marcar um ponto do Fluxo. */
 export const deferred = (): { promise: Promise<void>; resolve: () => void } => {
@@ -436,15 +473,16 @@ export const untilAborted = (signal: AbortSignal): Promise<never> =>
     signal.addEventListener('abort', () => reject(abortError()), { once: true });
   });
 
-/** Emite um `delta`, sinaliza `delta` e espera o abort. */
-export const gatedProvider = () => {
+/** Emite `text` num bloco aberto, sinaliza `delta` e espera o abort. */
+export const gatedProvider = (text = 'a') => {
   const { promise: delta, resolve: signalDelta } = deferred();
 
   const provider = new ScriptedProvider(async function* (
     signal: AbortSignal,
   ): AsyncGenerator<StreamEvent> {
     yield { type: 'started', model: testModel.id, usage: usage(3, 0) };
-    yield { type: 'delta', index: 0, part: 'text', text: 'a' };
+    yield { type: 'part_started', index: 0, part: { type: 'text' } };
+    yield { type: 'delta', index: 0, part: 'text', text };
     signalDelta();
 
     await untilAborted(signal);
@@ -455,12 +493,12 @@ export const gatedProvider = () => {
 
 interface BuiltDeps {
   store: MemoryStore;
-  /** Sem Provedor e sem Serviço: cada teste dá os dele. */
-  deps: Omit<FlowDeps, 'provider' | 'tools'>;
+  /** Sem Provedor, que cada teste dá, e sem Serviço, até o teste dar um. */
+  deps: Omit<RunDeps, 'provider'> & Pick<FlowDeps, 'locks'>;
   clock: ReturnType<typeof fixedClock>;
 }
 
-/** `FlowDeps` sem Provedor, com locks que simulam outra aba; não grava nada. */
+/** As dependências de um envio sem Provedor, com locks que simulam outra aba; não grava nada. */
 export const flowDeps = (store = new MemoryStore()): BuiltDeps => {
   const clock = fixedClock(50_000);
   let next = 0;
@@ -471,6 +509,7 @@ export const flowDeps = (store = new MemoryStore()): BuiltDeps => {
     deps: {
       store,
       settings: new MemorySettingsStore(),
+      tools: null,
       clock,
       estimator: { estimate: () => 1, estimateAttachment: () => 1 },
       newId: () => `id-${(next += 1)}`,

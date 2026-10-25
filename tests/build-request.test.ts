@@ -462,4 +462,19 @@ describe('continuationOf', () => {
       },
     ]);
   });
+
+  it('apara o texto como o turno seguinte o reenvia, para o cache não quebrar ali', () => {
+    const answer = [text('\n vou buscar  \n'), call('t1'), result('t1'), text('achei')];
+    const next = selectHistory({
+      messages: withSearch(answer),
+      model: model(),
+      effort: 'low',
+      estimator,
+      toolSpace: 40_000,
+    });
+
+    const round = { role: 'assistant', parts: [text('vou buscar'), call('t1')] };
+    expect(continuationOf(answer.slice(0, 3))[0]).toEqual(round);
+    expect(next.messages[1]).toEqual(round);
+  });
 });

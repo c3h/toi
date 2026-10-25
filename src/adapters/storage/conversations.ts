@@ -23,6 +23,13 @@ export class DexieConversationStore implements ConversationStore {
     this.#db = db;
   }
 
+  /** As Mensagens de uma Conversa em ordem de `seq`: o mesmo índice filtra e ordena. */
+  #messagesOf(conversationId: ConversationId) {
+    return this.#db.messages
+      .where('[conversationId+seq]')
+      .between([conversationId, Dexie.minKey], [conversationId, Dexie.maxKey]);
+  }
+
   async listConversations(): Promise<Conversation[]> {
     const records = await this.#db.conversations.orderBy('updatedAt').reverse().toArray();
     return records.map(fromConversationRecord);
@@ -81,16 +88,13 @@ export class DexieConversationStore implements ConversationStore {
     const { conversations, messages, attachments } = this.#db;
     await this.#db.transaction('rw', [conversations, messages, attachments], async () => {
       await conversations.delete(id);
-      await messages.where('conversationId').equals(id).delete();
+      await this.#messagesOf(id).delete();
       await attachments.where('conversationId').equals(id).delete();
     });
   }
 
   async listMessages(conversationId: ConversationId): Promise<Message[]> {
-    const records = await this.#db.messages
-      .where('[conversationId+seq]')
-      .between([conversationId, Dexie.minKey], [conversationId, Dexie.maxKey])
-      .toArray();
+    const records = await this.#messagesOf(conversationId).toArray();
     return records.map(fromMessageRecord);
   }
 

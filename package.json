@@ -7,12 +7,12 @@
     "dev": "vite",
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview",
-    "test": "vitest run --project=node && vitest run --project=browser",
+    "test": "vitest run",
     "test:watch": "vitest",
     "test:e2e": "vite build && playwright test",
     "typecheck": "tsc --noEmit",
     "size": "size-limit",
-    "check": "npm run typecheck && npm test && npm run build && npm run size && playwright test",
+    "check": "npm run typecheck && npm test && vite build && npm run size && playwright test",
     "deploy": "wrangler deploy"
   },
   "dependencies": {

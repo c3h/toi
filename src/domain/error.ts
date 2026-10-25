@@ -11,7 +11,6 @@ export type AppErrorCode =
   | 'overloaded'
   | 'api_error'
   | 'unreachable'
-  | 'aborted'
   | 'not_connected'
   | 'flow_busy'
   | 'storage_failed'
@@ -47,7 +46,6 @@ const MESSAGES: Record<AppErrorCode, string> = {
   overloaded: 'O Modelo está sobrecarregado.',
   api_error: 'Erro do lado do serviço.',
   unreachable: 'Sem conexão com o serviço.',
-  aborted: 'Requisição cancelada.',
   not_connected: 'Conecte uma Chave para conversar.',
   flow_busy: 'Espere a operação atual terminar, nesta ou em outra aba.',
   storage_failed: 'Não foi possível salvar tudo no navegador.',

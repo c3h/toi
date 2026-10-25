@@ -13,7 +13,7 @@ const sent = ({ attachment }: AttachmentUpload, content: BlobPart): OutgoingPart
 });
 
 describe('AnthropicProvider', () => {
-  it('monta o POST com headers obrigatórios, Esforço e payload de texto', async () => {
+  it('monta o POST com headers obrigatórios, Esforço, cache de prompt e payload de texto', async () => {
     let captured: { url: string; init: RequestInit | undefined } | null = null;
 
     const fetchImpl: FetchLike = async (input, init) => {
@@ -54,6 +54,7 @@ describe('AnthropicProvider', () => {
       model: 'claude-test',
       max_tokens: 128,
       stream: true,
+      cache_control: { type: 'ephemeral' },
       output_config: { effort: 'low' },
       messages: [{ role: 'user', content: [{ type: 'text', text: 'oi' }] }],
     });

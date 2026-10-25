@@ -1,6 +1,7 @@
 import { useEffect, useState, type CSSProperties } from 'react';
-import type { ThemedToken } from 'shiki/core';
 import { CopyButton } from '../CopyButton';
+import { highlight, type Token } from './highlight';
+import { languageOf, type Language } from './languages';
 
 interface CodeBlockProps {
   code: string;
@@ -9,23 +10,35 @@ interface CodeBlockProps {
   closed: boolean;
 }
 
+interface Highlighted {
+  /** O que foi destacado: num bloco que muda (tentar de novo), tokens antigos não valem. */
+  code: string;
+  language: Language;
+  /** `null`: sem destaque, para worker ou gramática que não baixam. */
+  tokens: Token[][] | null;
+}
+
 export const CodeBlock = ({ code, lang, closed }: CodeBlockProps) => {
-  const [tokens, setTokens] = useState<ThemedToken[][] | null>(null);
+  const [highlighted, setHighlighted] = useState<Highlighted | null>(null);
+  const language = lang === null ? null : languageOf(lang);
 
   useEffect(() => {
-    if (!closed || !lang) return;
+    if (!closed || language === null) return;
     let alive = true;
-    // Shiki fica num chunk próprio: só baixa quando aparece o primeiro bloco de código fechado.
-    import('./highlight')
-      .then(({ highlight }) => highlight(code, lang))
-      .then((result) => {
-        if (alive) setTokens(result);
-      })
-      .catch(() => undefined);
+    // O worker do Shiki nasce no primeiro bloco fechado; até ele responder, o código fica cru.
+    void highlight(code, language).then((tokens) => {
+      if (alive) setHighlighted({ code, language, tokens });
+    });
     return () => {
       alive = false;
     };
-  }, [code, lang, closed]);
+  }, [code, language, closed]);
+
+  const current =
+    highlighted !== null && highlighted.code === code && highlighted.language === language
+      ? highlighted
+      : null;
+  const tokens = current === null ? null : current.tokens;
 
   return (
     <div className="code-block">
@@ -36,7 +49,7 @@ export const CodeBlock = ({ code, lang, closed }: CodeBlockProps) => {
           className="code-copy inline-flex items-center gap-1 px-1 hover:text-text"
         />
       </div>
-      <pre>
+      <pre aria-busy={closed && language !== null && current === null}>
         <code>
           {tokens
             ? tokens.map((line, index) => (

@@ -8,7 +8,7 @@ import {
   type Round,
 } from '../src/domain/round';
 import type { StreamEvent } from '../src/domain/stream';
-import { makeMessage } from './helpers';
+import { makeMessage, textEvents } from './helpers';
 
 const draft = (parts: Part[] = []): Message =>
   makeMessage({
@@ -39,9 +39,9 @@ describe('applyEvent', () => {
     expect(message.firstTokenAt).toBe(101);
   });
 
-  it('abre bloco de texto quando o delta chega sem part_started', () => {
+  it('ignora delta de bloco que não foi aberto', () => {
     const { message } = run([{ type: 'delta', index: 0, part: 'text', text: 'oi' }]);
-    expect(message.parts).toEqual([{ type: 'text', text: 'oi' }]);
+    expect(message).toEqual(draft());
   });
 
   it('só mostra raciocínio terminado e assinado', () => {
@@ -75,7 +75,7 @@ describe('applyEvent', () => {
 
   it('mantém as Partes das Rodadas anteriores antes da Rodada atual', () => {
     const base: Part[] = [{ type: 'text', text: 'antes' }];
-    const { message } = run([{ type: 'delta', index: 0, part: 'text', text: 'depois' }], base);
+    const { message } = run(textEvents('depois'), base);
 
     expect(message.parts).toEqual([...base, { type: 'text', text: 'depois' }]);
   });

@@ -24,7 +24,7 @@ export interface ModelPicksError {
 
 export interface ModelsState {
   list: Model[];
-  /** Falha do último refresh; a lista exibida é o cache anterior. */
+  /** Falha da última carga, ao ler o cache ou ao listar; a lista exibida é a anterior. */
   stale: AppErrorInfo | null;
   refreshing: boolean;
 }
@@ -363,7 +363,7 @@ const TitleModelChoice = ({
  * andamento.
  */
 const SearchKey = ({ toi, service }: { toi: Toi; service: ServiceInfo }) => {
-  const [connected, setConnected] = useState(() => toi.serviceConnected(service.id));
+  const [connected, setConnected] = useState(() => toi.serviceConnected());
   const [editing, setEditing] = useState(false);
   const [key, setKey] = useState('');
   const [checking, setChecking] = useState(false);
@@ -380,7 +380,7 @@ const SearchKey = ({ toi, service }: { toi: Toi; service: ServiceInfo }) => {
     setChecking(true);
     setError(null);
     try {
-      await toi.connectService(service.id, key, current.signal);
+      await toi.connectService(key, current.signal);
       setKey('');
       setConnected(true);
       setEditing(false);
@@ -401,7 +401,7 @@ const SearchKey = ({ toi, service }: { toi: Toi; service: ServiceInfo }) => {
   const remove = async () => {
     setError(null);
     try {
-      await toi.disconnectService(service.id);
+      await toi.disconnectService();
       setConnected(false);
     } catch (cause) {
       setError(errorInfo(cause));
@@ -555,7 +555,7 @@ export default function Settings({
 
   const modelsSection = useRef<HTMLElement>(null);
   const searchSection = useRef<HTMLElement>(null);
-  const service = toi.services()[0]!;
+  const service = toi.service();
 
   useEffect(() => {
     if (section === 'modelos') modelsSection.current?.scrollIntoView();

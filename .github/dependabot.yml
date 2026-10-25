@@ -5,12 +5,18 @@ updates:
     schedule:
       interval: weekly
     open-pull-requests-limit: 5
-    # Pacotes presos por peer dependency sobem juntos; separados, o `npm ci` do PR não resolve.
+    # Pacotes presos uns aos outros por versão sobem juntos. Separados, o `npm ci` do PR não
+    # resolve o peer exato; no Playwright, o `@playwright/test` fixa a versão do `playwright`, e
+    # duas versões instaladas esperariam navegadores diferentes.
     groups:
       vitest:
         patterns: ['vitest', '@vitest/*', 'vitest-browser-react']
       vite:
         patterns: ['vite', '@vitejs/*', '@tailwindcss/vite', 'tailwindcss']
+      size-limit:
+        patterns: ['size-limit', '@size-limit/*']
+      playwright:
+        patterns: ['playwright', '@playwright/test']
   - package-ecosystem: github-actions
     directory: /
     schedule:

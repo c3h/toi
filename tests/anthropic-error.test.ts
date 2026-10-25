@@ -59,4 +59,53 @@ describe('anthropicErrors.fromResponse', () => {
       'invalid_request',
     );
   });
+
+  it('o tipo do envelope reforça 429 e 529 sob outro status', async () => {
+    const overloaded = await anthropicErrors.fromResponse(
+      jsonResponse(500, errorEnvelope('overloaded_error', 'Overloaded')),
+      NOW,
+    );
+    const limited = await anthropicErrors.fromResponse(
+      jsonResponse(503, errorEnvelope('rate_limit_error', 'slow down')),
+      NOW,
+    );
+
+    expect(overloaded.code).toBe('overloaded');
+    expect(limited.code).toBe('rate_limited');
+  });
+
+  it('sem envelope, o status decide e o statusText vira o detalhe', async () => {
+    const html = await anthropicErrors.fromResponse(
+      new Response('<html>', { status: 502, statusText: 'Bad Gateway' }),
+      NOW,
+    );
+    const malformed = await anthropicErrors.fromResponse(
+      new Response(JSON.stringify({ type: 'error', error: { type: 'overloaded_error' } }), {
+        status: 500,
+        statusText: 'Internal Server Error',
+      }),
+      NOW,
+    );
+
+    expect(html).toMatchObject({ code: 'api_error', detail: 'Bad Gateway' });
+    expect(malformed).toMatchObject({ code: 'api_error', detail: 'Internal Server Error' });
+  });
+});
+
+describe('anthropicErrors.fromEvent', () => {
+  it.each([
+    ['authentication_error', 'invalid_credential'],
+    ['permission_error', 'permission_denied'],
+    ['not_found_error', 'model_unavailable'],
+    ['rate_limit_error', 'rate_limited'],
+    ['overloaded_error', 'overloaded'],
+    ['api_error', 'api_error'],
+    ['invalid_request_error', 'invalid_request'],
+    ['tipo_que_a_api_acrescentar', 'unknown'],
+  ])('%s vira %s', (type, code) => {
+    expect(anthropicErrors.fromEvent({ type, message: 'detalhe' })).toMatchObject({
+      code,
+      detail: 'detalhe',
+    });
+  });
 });

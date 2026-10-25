@@ -1,7 +1,96 @@
 @import 'tailwindcss';
-@import '@fontsource-variable/geist-mono/wght.css';
-@import '@fontsource-variable/lora/wght.css';
-@import '@fontsource-variable/lora/wght-italic.css';
+
+/*
+ * Fontes da própria origem, só nos subsets que o toi usa: `latin` (todo o pt-BR) e
+ * `latin-ext`, mais o `symbols2` do Geist Mono, que traz o box-drawing de árvores e
+ * tabelas em código. O CSS do `@fontsource-variable` declararia também cirílico,
+ * vietnamita e os símbolos da Lora. Pesos, `unicode-range` e ordem vêm do pacote
+ * (`wght.css` e `wght-italic.css`); a Lora tem itálico para `<em>` e citação.
+ */
+@font-face {
+  font-family: 'Geist Mono Variable';
+  font-style: normal;
+  font-display: swap;
+  font-weight: 100 900;
+  src: url('@fontsource-variable/geist-mono/files/geist-mono-symbols2-wght-normal.woff2')
+    format('woff2-variations');
+  unicode-range: U+2000-2001, U+2004-2008, U+200A, U+23B8-23BD, U+2500-259F;
+}
+
+@font-face {
+  font-family: 'Geist Mono Variable';
+  font-style: normal;
+  font-display: swap;
+  font-weight: 100 900;
+  src: url('@fontsource-variable/geist-mono/files/geist-mono-latin-ext-wght-normal.woff2')
+    format('woff2-variations');
+  unicode-range:
+    U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329,
+    U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C0, U+2113,
+    U+2C60-2C7F, U+A720-A7FF;
+}
+
+@font-face {
+  font-family: 'Geist Mono Variable';
+  font-style: normal;
+  font-display: swap;
+  font-weight: 100 900;
+  src: url('@fontsource-variable/geist-mono/files/geist-mono-latin-wght-normal.woff2')
+    format('woff2-variations');
+  unicode-range:
+    U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308,
+    U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+
+@font-face {
+  font-family: 'Lora Variable';
+  font-style: normal;
+  font-display: swap;
+  font-weight: 400 700;
+  src: url('@fontsource-variable/lora/files/lora-latin-ext-wght-normal.woff2')
+    format('woff2-variations');
+  unicode-range:
+    U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329,
+    U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C0, U+2113,
+    U+2C60-2C7F, U+A720-A7FF;
+}
+
+@font-face {
+  font-family: 'Lora Variable';
+  font-style: normal;
+  font-display: swap;
+  font-weight: 400 700;
+  src: url('@fontsource-variable/lora/files/lora-latin-wght-normal.woff2')
+    format('woff2-variations');
+  unicode-range:
+    U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308,
+    U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+
+@font-face {
+  font-family: 'Lora Variable';
+  font-style: italic;
+  font-display: swap;
+  font-weight: 400 700;
+  src: url('@fontsource-variable/lora/files/lora-latin-ext-wght-italic.woff2')
+    format('woff2-variations');
+  unicode-range:
+    U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329,
+    U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C0, U+2113,
+    U+2C60-2C7F, U+A720-A7FF;
+}
+
+@font-face {
+  font-family: 'Lora Variable';
+  font-style: italic;
+  font-display: swap;
+  font-weight: 400 700;
+  src: url('@fontsource-variable/lora/files/lora-latin-wght-italic.woff2')
+    format('woff2-variations');
+  unicode-range:
+    U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308,
+    U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
 
 /* Tokens do blog (~/Documents/blog): escuro por padrão, laranja como única cor. */
 :root,
@@ -120,6 +209,18 @@ body {
     position: absolute;
     left: -0.9em;
   }
+}
+
+/* Mensagem longe da tela não faz layout nem pinta (docs/architecture.md §9). Até aparecer pela primeira vez reserva a altura média medida do papel; depois, a que teve (`auto`). A média, acima da mediana, faz o fim encolher no caminho de "ir para o fim", e a rolagem para nele, não antes. */
+.message {
+  content-visibility: auto;
+  contain-intrinsic-size: auto 4.125rem;
+  /* O anel de foco passa da borda (`outline-offset`); a contenção de pintura o cortaria. */
+  overflow-clip-margin: 0.5rem;
+}
+
+.message-reply {
+  contain-intrinsic-size: auto 32.5rem;
 }
 
 /* Cursor do Fluxo, só com a resposta esperando o Provedor (ui/use-reveal.ts): fica no fim do último elemento (em lista, do último item), não numa linha própria. */

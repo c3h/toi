@@ -1,31 +1,58 @@
-import { createHighlighterCore, type HighlighterCore, type ThemedToken } from 'shiki/core';
-import { createJavaScriptRegexEngine } from 'shiki/engine/javascript';
-import { bundledLanguages } from 'shiki/langs';
-import { bundledThemes } from 'shiki/themes';
+import type { ThemedToken } from 'shiki/core';
+import type { Language } from './languages';
 
-const THEMES = { light: 'github-light', dark: 'github-dark-dimmed' } as const;
+/** O que volta do worker: o texto e as cores dos dois temas em variáveis. */
+export type Token = Pick<ThemedToken, 'content' | 'htmlStyle'>;
 
-let highlighter: Promise<HighlighterCore> | null = null;
-const loading = new Map<string, Promise<void>>();
+export interface HighlightRequest {
+  id: number;
+  code: string;
+  lang: Language;
+}
 
-const instance = (): Promise<HighlighterCore> =>
-  (highlighter ??= createHighlighterCore({
-    themes: [bundledThemes[THEMES.light](), bundledThemes[THEMES.dark]()],
-    langs: [],
-    // Engine em JavaScript: sem wasm no bundle. `forgiving` ignora o raro regex que ele não suporta.
-    engine: createJavaScriptRegexEngine({ forgiving: true }),
-  }));
+/** `tokens` é `null` quando a gramática não baixou. */
+export interface HighlightReply {
+  id: number;
+  tokens: Token[][] | null;
+}
 
-const isBundled = (lang: string): lang is keyof typeof bundledLanguages => lang in bundledLanguages;
+const pending = new Map<number, (tokens: Token[][] | null) => void>();
+let next = 0;
 
-/** Tokens com as cores dos dois temas em variáveis; `null` para linguagem desconhecida. */
-export const highlight = async (code: string, lang: string): Promise<ThemedToken[][] | null> => {
-  const id = lang.toLowerCase();
-  if (!isBundled(id)) return null;
+/**
+ * O Shiki tokeniza num worker de módulo, criado no primeiro bloco fechado; a
+ * main thread só recebe os tokens. Worker que caiu fica `failed` até recarregar.
+ */
+let worker: Worker | 'failed' | null = null;
 
-  const core = await instance();
-  if (!loading.has(id)) loading.set(id, core.loadLanguage(bundledLanguages[id]()));
-  await loading.get(id);
+const start = (): Worker => {
+  const created = new Worker(new URL('./highlight.worker.ts', import.meta.url), {
+    type: 'module',
+  });
 
-  return core.codeToTokens(code, { lang: id, themes: THEMES, defaultColor: false }).tokens;
+  created.addEventListener('message', ({ data }: MessageEvent<HighlightReply>) => {
+    pending.get(data.id)!(data.tokens);
+    pending.delete(data.id);
+  });
+
+  // O arquivo do worker que um deploy apagou chega como 404 e também cai aqui.
+  created.addEventListener('error', () => {
+    created.terminate();
+    worker = 'failed';
+    for (const settle of pending.values()) settle(null);
+    pending.clear();
+  });
+
+  return created;
+};
+
+/** Tokens do código; `null` quando o worker ou a gramática não baixam. */
+export const highlight = (code: string, lang: Language): Promise<Token[][] | null> => {
+  if (worker === 'failed') return Promise.resolve(null);
+  worker ??= start();
+
+  const id = next++;
+  const request: HighlightRequest = { id, code, lang };
+  worker.postMessage(request);
+  return new Promise((resolve) => pending.set(id, resolve));
 };

@@ -19,7 +19,7 @@ const reply = [
 test('Fluxo de 500 deltas sem long task acima de 50 ms', async ({ page }) => {
   await connect(page);
 
-  // Aquece os chunks lazy (Markdown e Shiki) fora da medição: download não é Fluxo.
+  // Aquece o chunk de Markdown e o worker do Shiki fora da medição: download não é Fluxo.
   await setMock(page, { reply: '```ts\nconst a = 1;\n```', deltas: 1, delayMs: 0 });
   await send(page, 'aquecer');
   await expect(page.locator('.code-block .token').first()).toBeVisible();

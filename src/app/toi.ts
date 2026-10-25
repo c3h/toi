@@ -1,6 +1,6 @@
 import type { Conversation } from '../domain/conversation';
 import { appError } from '../domain/error';
-import type { AttachmentId, ConversationId, ProviderId, ServiceId } from '../domain/ids';
+import type { AttachmentId, ConversationId, ProviderId } from '../domain/ids';
 import type { Message } from '../domain/message';
 import {
   pickedModels,
@@ -16,14 +16,7 @@ import type { ChatProvider, ProviderAdapter, ProviderInfo } from '../ports/chat-
 import type { CredentialStore } from '../ports/credential-store';
 import type { SettingsStore } from '../ports/settings-store';
 import type { ServiceAdapter, ServiceInfo, WebTools } from '../ports/web-tools';
-import {
-  changeEffort,
-  changeModel,
-  createConversation,
-  deleteConversation,
-  renameConversation,
-} from './conversations';
-import { eraseAll, eraseConversations } from './erase';
+import { changeEffort, changeModel, createConversation, renameConversation } from './conversations';
 import { exportHistory } from './export';
 import { createFlow, type Flow, type FlowDeps } from './flow';
 import { conversationWriteLocks, historyEraseLocks, withLocks } from './locks';
@@ -38,8 +31,8 @@ export interface ToiDeps extends Omit<FlowDeps, 'provider' | 'tools' | 'onUpdate
   settings: SettingsStore;
   /** Provedores registrados em `main.tsx`, na ordem em que a UI os oferece. */
   providers: ProviderAdapter[];
-  /** Serviços das Ferramentas registrados em `main.tsx`. */
-  services: ServiceAdapter[];
+  /** O Serviço das Ferramentas; um só, até haver decisão por um segundo. */
+  service: ServiceAdapter;
 }
 
 /**
@@ -49,7 +42,7 @@ export interface ToiDeps extends Omit<FlowDeps, 'provider' | 'tools' | 'onUpdate
  *
  * `flow` é estável: trocar uma Chave troca o Provedor por dentro. Sem Chave
  * para o Provedor do Modelo, `send`/`retry` recusam com `not_connected`. Com
- * Chave de um Serviço, o envio oferece as Ferramentas dele; sem, não oferece.
+ * Chave do Serviço, o envio oferece as Ferramentas dele; sem, não oferece.
  *
  * Quando a primeira resposta de uma Conversa termina `complete`, a aba que a
  * enviou pede o Título ao Modelo do Título, fora do Fluxo e do lock da
@@ -59,24 +52,24 @@ export interface Toi {
   readonly flow: Flow;
   /** O que a UI mostra de cada Provedor registrado; nunca endpoint ou Protocolo. */
   providers(): ProviderInfo[];
-  /** Há Chave para pelo menos um Provedor. A Chave de um Serviço não conta: sozinha ela não conversa. */
+  /** Há Chave para pelo menos um Provedor. A Chave do Serviço não conta: sozinha ela não conversa. */
   connected(): boolean;
-  /** O que a UI mostra de cada Serviço registrado; nunca endpoint. */
-  services(): ServiceInfo[];
-  serviceConnected(service: ServiceId): boolean;
+  /** O que a UI mostra do Serviço; nunca endpoint. */
+  service(): ServiceInfo;
+  serviceConnected(): boolean;
   /**
    * Valida e grava a Chave do Serviço. Recusada, ou sem dar para validar agora
    * (cota, limite por minuto, rede), recusa com o erro e a anterior fica.
    */
-  connectService(service: ServiceId, apiKey: string, signal?: AbortSignal): Promise<void>;
+  connectService(apiKey: string, signal: AbortSignal): Promise<void>;
   /** Para o Fluxo em voo, que usa a Chave, e a remove. */
-  disconnectService(service: ServiceId): Promise<void>;
+  disconnectService(): Promise<void>;
   /** Cada Mensagem que esta aba grava ou recebe em Fluxo. Devolve o cancelamento. */
   subscribe(listener: (message: Message) => void): () => void;
   /** Cache de Modelos dos Provedores conectados; `null` sem conexão ou se falta a listagem de algum. */
   models(): Promise<Model[] | null>;
-  /** Lista de novo em todos os Provedores conectados. */
-  refreshModels(signal?: AbortSignal): Promise<Model[]>;
+  /** Lista de novo em todos os Provedores conectados; a lista de uma Chave que saiu no meio não grava o cache. */
+  refreshModels(signal: AbortSignal): Promise<Model[]>;
   /** Default de uma Conversa nova. */
   lastModel(): Promise<ModelRef | null>;
   /** Default de uma Conversa nova; `null` até a pessoa escolher um. */
@@ -100,17 +93,15 @@ export interface Toi {
   changeModel(id: ConversationId, model: ModelRef): Promise<Conversation | null>;
   /** Troca o Esforço da Conversa e passa a ser o default das próximas. */
   changeEffort(id: ConversationId, effort: Effort): Promise<Conversation | null>;
-  listConversations(): Promise<Conversation[]>;
   /** Histórico gravado, também por outra aba; ver `ConversationStore`. */
   watchConversations(listener: (conversations: Conversation[]) => void): () => void;
   watchMessages(conversationId: ConversationId, listener: (messages: Message[]) => void): () => void;
-  listMessages(conversationId: ConversationId): Promise<Message[]>;
   /** O envio que a segue grava Modelo e Esforço como default das próximas. */
   createConversation(model: ModelRef, effort: Effort): Promise<Conversation>;
   renameConversation(id: ConversationId, title: string): Promise<Conversation | null>;
   deleteConversation(id: ConversationId): Promise<void>;
   /** Valida e grava a Chave; devolve os Modelos de todos os Provedores conectados. */
-  connect(provider: ProviderId, apiKey: string, signal?: AbortSignal): Promise<Model[]>;
+  connect(provider: ProviderId, apiKey: string, signal: AbortSignal): Promise<Model[]>;
   disconnect(provider: ProviderId): Promise<void>;
   eraseConversations(): Promise<void>;
   eraseAll(): Promise<void>;
@@ -124,15 +115,15 @@ export const createToi = async (deps: ToiDeps): Promise<Toi> => {
   const infos = deps.providers.map((adapter) => adapter.info);
   const adapters = new Map(deps.providers.map((adapter) => [adapter.info.id, adapter]));
   const connections = new Map<ProviderId, ChatProvider>();
-  const services = new Map(deps.services.map((adapter) => [adapter.info.id, adapter]));
-  const serviceConnections = new Map<ServiceId, WebTools>();
+  const serviceId = deps.service.info.id;
+  // As Ferramentas da Chave gravada; `null` sem ela.
+  let tools: WebTools | null = null;
   const listeners = new Set<(message: Message) => void>();
 
   const control = createFlow({
     ...deps,
     provider: (id) => connections.get(id) ?? null,
-    // Um Serviço por vez: o primeiro conectado executa as Ferramentas.
-    tools: () => serviceConnections.values().next().value ?? null,
+    tools: () => tools,
     onUpdate: (message) => {
       for (const listener of listeners) listener(message);
     },
@@ -158,9 +149,8 @@ export const createToi = async (deps: ToiDeps): Promise<Toi> => {
       if (key) connections.set(adapter.info.id, adapter.create(key));
     }),
     // Sem revalidar na abertura: uma Chave recusada aparece na primeira chamada.
-    ...deps.services.map(async (adapter) => {
-      const key = await deps.credentials.get(adapter.info.id);
-      if (key) serviceConnections.set(adapter.info.id, adapter.create(key));
+    deps.credentials.get(serviceId).then((key) => {
+      if (key) tools = deps.service.create(key);
     }),
     recoverInterrupted(deps),
   ]);
@@ -244,8 +234,8 @@ export const createToi = async (deps: ToiDeps): Promise<Toi> => {
     flow,
     providers: () => infos,
     connected: () => connections.size > 0,
-    services: () => deps.services.map((adapter) => adapter.info),
-    serviceConnected: (service) => serviceConnections.has(service),
+    service: () => deps.service.info,
+    serviceConnected: () => tools !== null,
 
     subscribe(listener) {
       listeners.add(listener);
@@ -256,12 +246,16 @@ export const createToi = async (deps: ToiDeps): Promise<Toi> => {
 
     models: cachedModels,
 
-    async refreshModels(signal = new AbortController().signal) {
+    async refreshModels(signal) {
       if (connections.size === 0) throw appError('not_connected');
 
       const lists = await Promise.all(
         [...connections].map(async ([id, provider]) => {
           const models = await provider.listModels(signal);
+          // A Chave trocou ou saiu durante a listagem: a lista dela não grava por cima da atual.
+          if (connections.get(id) !== provider) {
+            throw new DOMException('A Chave mudou durante a listagem.', 'AbortError');
+          }
           await cacheModels(id, models);
           return models;
         }),
@@ -304,19 +298,17 @@ export const createToi = async (deps: ToiDeps): Promise<Toi> => {
       return updated;
     },
 
-    listConversations: () => deps.store.listConversations(),
     watchConversations: (listener) => deps.store.watchConversations(listener),
     watchMessages: (conversationId, listener) => deps.store.watchMessages(conversationId, listener),
-    listMessages: (conversationId) => deps.store.listMessages(conversationId),
     createConversation: (model, effort) => createConversation(deps, model, effort),
     renameConversation: (id, title) => renameConversation(deps, id, title),
 
     deleteConversation(id) {
       stopNaming((conversation) => conversation === id);
-      return guarded(() => deleteConversation(deps, id), id);
+      return guarded(() => deps.store.deleteConversation(id), id);
     },
 
-    async connect(providerId, apiKey, signal = new AbortController().signal) {
+    async connect(providerId, apiKey, signal) {
       const adapter = adapters.get(providerId);
       if (!adapter) throw new Error(`Provedor ${providerId} não registrado.`);
 
@@ -334,7 +326,7 @@ export const createToi = async (deps: ToiDeps): Promise<Toi> => {
       const others = [...connections.keys()].filter((id) => id !== providerId);
       const [, cached] = await Promise.all([
         cacheModels(providerId, models),
-        readCachedModels(others).catch(() => []),
+        readCachedModels(others),
       ]);
       return [...cached.flatMap((list) => list ?? []), ...models];
     },
@@ -346,42 +338,44 @@ export const createToi = async (deps: ToiDeps): Promise<Toi> => {
         connections.delete(providerId);
       }),
 
-    async connectService(serviceId, apiKey, signal = new AbortController().signal) {
-      const adapter = services.get(serviceId);
-      if (!adapter) throw new Error(`Serviço ${serviceId} não registrado.`);
-
+    async connectService(apiKey, signal) {
       const key = apiKey.trim();
       if (!key) throw appError('tool_invalid_credential');
 
-      const tools = adapter.create(key);
-      await tools.verify(signal);
+      const candidate = deps.service.create(key);
+      await candidate.verify(signal);
       // Desistir durante a validação vale mesmo se ela acabou de passar.
       signal.throwIfAborted();
       await deps.credentials.set(serviceId, key);
-      serviceConnections.set(serviceId, tools);
+      tools = candidate;
     },
 
     // Outra aba com o Serviço segue usando a Chave até recarregar, como a do Provedor.
-    disconnectService: (serviceId) =>
+    disconnectService: () =>
       control.exclusive(async () => {
         await deps.credentials.delete(serviceId);
-        serviceConnections.delete(serviceId);
+        tools = null;
       }),
 
     eraseConversations() {
       stopNaming(() => true);
-      return guarded(() => eraseConversations(deps.store));
+      return guarded(() => deps.store.clearConversations());
     },
 
     eraseAll() {
       stopNaming(() => true);
       return guarded(async () => {
         try {
-          await eraseAll(deps);
+          // Conversas, Configurações e todas as Chaves, também as de Provedor que saiu do registro.
+          await Promise.all([
+            deps.store.clearConversations(),
+            deps.settings.clear(),
+            deps.credentials.clear(),
+          ]);
         } finally {
           // Falha parcial ainda desconecta: "apagar tudo" erra para o lado da Chave fora.
           connections.clear();
-          serviceConnections.clear();
+          tools = null;
         }
       });
     },
