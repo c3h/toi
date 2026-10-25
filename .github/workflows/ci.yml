@@ -27,7 +27,8 @@ jobs:
           node-version-file: .node-version
           cache: npm
       - run: npm ci
-      - run: npx playwright install --with-deps chromium
+      # Só o headless shell: Vitest browser e e2e rodam headless, e o Chromium completo não é usado.
+      - run: npx playwright install --with-deps --only-shell chromium
       - run: npm run check
       - name: Validar o pacote de publicação
         run: npx wrangler deploy --dry-run
