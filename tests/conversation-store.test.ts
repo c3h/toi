@@ -1,27 +1,9 @@
 import 'fake-indexeddb/auto';
 import { describe, expect, it } from 'vitest';
 import { DexieConversationStore } from '../src/adapters/storage/conversations';
-import { ToiDatabase } from '../src/adapters/storage/db';
 import { describeConversationStore } from './conversation-store.contract';
+import { dropDb, openDb, withDb } from './dexie';
 import { makeConversation, makeMessage, MemoryStore, textFile } from './helpers';
-
-let dbCount = 0;
-
-const openDb = (): ToiDatabase => new ToiDatabase(`toi-test-${(dbCount += 1)}`);
-
-const dropDb = async (db: ToiDatabase): Promise<void> => {
-  db.close();
-  await db.delete();
-};
-
-const withDb = async (task: (db: ToiDatabase) => Promise<void>): Promise<void> => {
-  const db = openDb();
-  try {
-    await task(db);
-  } finally {
-    await dropDb(db);
-  }
-};
 
 describeConversationStore('MemoryStore', async () => {
   const store = new MemoryStore();
