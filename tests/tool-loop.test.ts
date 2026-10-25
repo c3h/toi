@@ -2,62 +2,21 @@ import { describe, expect, it } from 'vitest';
 import { startSendMessage, type RunDeps, type SendOptions } from '../src/app/send-message';
 import { MAX_ROUNDS } from '../src/app/web-tools';
 import { appError } from '../src/domain/error';
-import type { Model } from '../src/domain/model';
 import type { StreamEvent } from '../src/domain/stream';
-import type { StopReason } from '../src/domain/usage';
 import { WEB_FETCH, WEB_SEARCH } from '../src/domain/web';
-import type { ChatProvider, ChatRequest } from '../src/ports/chat-provider';
 import {
   abortError,
   baseDeps,
   FakeWebTools,
   hit,
   MemorySettingsStore,
+  round,
+  ScriptedProvider,
   sendInput,
   testModel,
-  usage,
+  textEvents,
+  toolCall,
 } from './helpers';
-
-/** Um Provedor que responde cada Rodada com o script seguinte. */
-class RoundsProvider implements ChatProvider {
-  readonly requests: ChatRequest[] = [];
-  readonly #rounds: StreamEvent[][];
-
-  constructor(rounds: StreamEvent[][]) {
-    this.#rounds = rounds;
-  }
-
-  async listModels(): Promise<Model[]> {
-    return [testModel];
-  }
-
-  async *stream(request: ChatRequest, signal: AbortSignal): AsyncGenerator<StreamEvent> {
-    const events = this.#rounds[this.requests.length];
-    this.requests.push(request);
-    if (events === undefined) throw new Error('Rodada fora do script.');
-    for (const event of events) {
-      if (signal.aborted) throw abortError();
-      yield event;
-    }
-  }
-}
-
-const toolCall = (index: number, callId: string, tool: string, json: string): StreamEvent[] => [
-  { type: 'part_started', index, part: { type: 'tool_call', callId, tool } },
-  { type: 'delta', index, part: 'input', text: json },
-  { type: 'part_finished', index },
-];
-
-const round = (
-  body: StreamEvent[],
-  stopReason: StopReason,
-  output = 5,
-): StreamEvent[] => [
-  { type: 'started', model: testModel.id, usage: usage(10, 0) },
-  ...body,
-  { type: 'usage', usage: usage(10, output), stopReason },
-  { type: 'finished' },
-];
 
 const searching = (callId = 't1', query = 'cobre'): StreamEvent[] =>
   round(
@@ -71,8 +30,7 @@ const searching = (callId = 't1', query = 'cobre'): StreamEvent[] =>
     'tool_use',
   );
 
-const answering = (text = 'O cobre subiu.'): StreamEvent[] =>
-  round([{ type: 'delta', index: 0, part: 'text', text }], 'end_turn', 7);
+const answering = (text = 'O cobre subiu.'): StreamEvent[] => round(textEvents(text), 'end_turn', 7);
 
 const send = async (deps: RunDeps, overrides: Partial<SendOptions> = {}) =>
   (await startSendMessage(deps, { ...sendInput(), signal: new AbortController().signal, ...overrides }))
@@ -80,7 +38,7 @@ const send = async (deps: RunDeps, overrides: Partial<SendOptions> = {}) =>
 
 const setup = async (rounds: StreamEvent[][]) => {
   const built = await baseDeps();
-  const provider = new RoundsProvider(rounds);
+  const provider = new ScriptedProvider({ rounds });
   const tools = new FakeWebTools();
   return { ...built, provider, tools, run: { ...built.deps, provider, tools } };
 };
@@ -234,7 +192,7 @@ describe('laço de Rodadas', () => {
     const { run, tools } = await setup([
       round(
         [
-          { type: 'delta', index: 0, part: 'text', text: 'vou buscar' },
+          ...textEvents('vou buscar'),
           { type: 'part_started', index: 1, part: { type: 'tool_call', callId: 't1', tool: WEB_SEARCH } },
           { type: 'delta', index: 1, part: 'input', text: '{"query":' },
         ],

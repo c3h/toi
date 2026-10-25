@@ -76,9 +76,7 @@ const startBlock = (event: Extract<StreamEvent, { type: 'part_started' }>): Bloc
   }
 };
 
-/** Delta sem `part_started` abre o bloco de texto, como o Fluxo fazia antes das Rodadas. */
-const extend = (block: Block | undefined, kind: DeltaKind, text: string): Block | undefined => {
-  if (block === undefined) return kind === 'text' ? { type: 'text', text } : undefined;
+const extend = (block: Block, kind: DeltaKind, text: string): Block => {
   if (block.type === 'text' && kind === 'text') return { ...block, text: block.text + text };
   if (block.type === 'reasoning' && kind === 'reasoning') return { ...block, text: block.text + text };
   if (block.type === 'reasoning' && kind === 'signature') {
@@ -123,9 +121,13 @@ export const applyEvent = (
     case 'part_started':
       next = withBlock(round, event.index, startBlock(event));
       break;
-    case 'delta':
-      next = withBlock(round, event.index, extend(round.blocks.get(event.index), event.part, event.text));
+    case 'delta': {
+      const block = round.blocks.get(event.index);
+      // Delta só estende o bloco que um `part_started` abriu; fora dele, nada muda.
+      if (block === undefined) return { message, round };
+      next = withBlock(round, event.index, extend(block, event.part, event.text));
       break;
+    }
     case 'part_finished':
       next = withBlock(round, event.index, finish(round.blocks.get(event.index)));
       break;

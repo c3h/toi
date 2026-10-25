@@ -14,11 +14,14 @@ import {
   abortError,
   baseDeps,
   deferred,
+  gatedProvider,
   imageFile,
   MemoryStore,
+  replyEvents,
   ScriptedProvider,
   sendInput,
   testModel,
+  textEvents,
   textFile,
   usage,
 } from './helpers';
@@ -50,10 +53,7 @@ describe('sendMessage', () => {
     const { store, deps } = await baseDeps();
     const provider = new ScriptedProvider(successEvents());
 
-    const result = await sendMessage(
-      { ...deps, tools: null, provider },
-      ask(),
-    );
+    const result = await sendMessage({ ...deps, provider }, ask());
 
     expect(result.message.status).toBe('complete');
     expect(textOf(result.message)).toBe('Olá, mundo');
@@ -82,36 +82,11 @@ describe('sendMessage', () => {
   it('marca interrupted e preserva o texto parcial quando a pessoa para', async () => {
     const { deps } = await baseDeps();
     const controller = new AbortController();
+    const { provider, delta } = gatedProvider('parcial');
 
-    let signalFirstDelta: () => void = () => undefined;
-    const firstDelta = new Promise<void>((resolve) => {
-      signalFirstDelta = resolve;
-    });
+    const promise = sendMessage({ ...deps, provider }, ask({ signal: controller.signal }));
 
-    const provider = new ScriptedProvider(async function* (): AsyncGenerator<StreamEvent> {
-      yield { type: 'started', model: testModel.id, usage: usage(3, 0) };
-      yield { type: 'part_started', index: 0, part: { type: 'text' } };
-      yield { type: 'delta', index: 0, part: 'text', text: 'parcial' };
-
-      if (controller.signal.aborted) throw abortError();
-      await new Promise<never>((_, reject) => {
-        controller.signal.addEventListener('abort', () => reject(abortError()), { once: true });
-      });
-    });
-
-    const promise = sendMessage(
-      {
-        ...deps,
-        tools: null,
-        provider,
-        onUpdate: (message) => {
-          if (textOf(message) === 'parcial') signalFirstDelta();
-        },
-      },
-      ask({ signal: controller.signal }),
-    );
-
-    await firstDelta;
+    await delta;
     controller.abort();
 
     const result = await promise;
@@ -129,10 +104,7 @@ describe('sendMessage', () => {
       throw new AppError('overloaded', 'O Modelo está sobrecarregado.');
     });
 
-    const result = await sendMessage(
-      { ...deps, tools: null, provider },
-      ask(),
-    );
+    const result = await sendMessage({ ...deps, provider }, ask());
 
     expect(result.message.status).toBe('failed');
     expect(result.message.error?.code).toBe('overloaded');
@@ -146,10 +118,7 @@ describe('sendMessage', () => {
       throw abortError();
     });
 
-    const result = await sendMessage(
-      { ...deps, tools: null, provider },
-      ask(),
-    );
+    const result = await sendMessage({ ...deps, provider }, ask());
 
     expect(result.message.status).toBe('complete');
     expect(result.message.error).toBeNull();
@@ -170,16 +139,14 @@ describe('sendMessage', () => {
     const { deps } = await baseDeps(store);
 
     const provider = new ScriptedProvider(async function* (): AsyncGenerator<StreamEvent> {
-      yield { type: 'started', model: testModel.id, usage: usage(3, 0) };
-      yield { type: 'delta', index: 0, part: 'text', text: 'ok' };
-      store.fail = true;
-      yield { type: 'finished' };
+      for (const event of replyEvents('ok')) {
+        // A resposta chega inteira; só o flush final falha.
+        if (event.type === 'finished') store.fail = true;
+        yield event;
+      }
     });
 
-    const result = await sendMessage(
-      { ...deps, tools: null, provider },
-      ask(),
-    );
+    const result = await sendMessage({ ...deps, provider }, ask());
 
     expect(result.message.status).toBe('complete');
     expect(textOf(result.message)).toBe('ok');
@@ -191,19 +158,18 @@ describe('sendMessage', () => {
 
     const provider = new ScriptedProvider(async function* (): AsyncGenerator<StreamEvent> {
       yield { type: 'started', model: testModel.id, usage: usage(3, 0) };
+      yield { type: 'part_started', index: 0, part: { type: 'reasoning' } };
       clock.set(50_800);
       yield { type: 'delta', index: 0, part: 'reasoning', text: 'pensando' };
+      yield { type: 'part_finished', index: 0 };
       clock.set(51_000);
-      yield { type: 'delta', index: 1, part: 'text', text: 'oi' };
+      yield* textEvents('oi', 1);
       yield { type: 'usage', usage: usage(3, 4), stopReason: 'end_turn' };
       yield { type: 'finished' };
       clock.set(52_000);
     });
 
-    const result = await sendMessage(
-      { ...deps, tools: null, provider },
-      ask(),
-    );
+    const result = await sendMessage({ ...deps, provider }, ask());
 
     expect(result.message).toMatchObject({
       createdAt: 50_000,
@@ -226,15 +192,12 @@ describe('sendMessage', () => {
       yield* successEvents();
     });
 
-    const first = await sendMessage(
-      { ...deps, tools: null, provider },
-      ask(),
-    );
+    const first = await sendMessage({ ...deps, provider }, ask());
 
     failing = false;
 
     const retried = await retryMessage(
-      { ...deps, tools: null, provider },
+      { ...deps, provider },
       {
         conversationId: 'c1',
         messageId: first.message.id,
@@ -261,7 +224,7 @@ describe('sendMessage', () => {
   it('retry grava o destino novo antes da rede, mesmo se falhar antes de started', async () => {
     const { store, deps } = await baseDeps();
     const first = await sendMessage(
-      { ...deps, tools: null, provider: new ScriptedProvider(successEvents()) },
+      { ...deps, provider: new ScriptedProvider(successEvents()) },
       ask(),
     );
 
@@ -271,7 +234,7 @@ describe('sendMessage', () => {
     });
 
     const retried = await retryMessage(
-      { ...deps, tools: null, provider: unreachable },
+      { ...deps, provider: unreachable },
       {
         conversationId: 'c1',
         messageId: first.message.id,
@@ -302,7 +265,7 @@ describe('sendMessage com Anexos', () => {
     const provider = new ScriptedProvider(successEvents());
     const files = [imageFile('i1', 3), textFile('t1', '# notas')];
 
-    const result = await sendMessage({ ...deps, tools: null, provider }, ask({ attachments: files }));
+    const result = await sendMessage({ ...deps, provider }, ask({ attachments: files }));
 
     expect(result.message.status).toBe('complete');
     const [user] = await store.listMessages('c1');
@@ -333,7 +296,7 @@ describe('sendMessage com Anexos', () => {
     const controller = new AbortController();
 
     const run = await startSendMessage(
-      { ...deps, tools: null, provider },
+      { ...deps, provider },
       ask({ attachments: [imageFile('i1')], signal: controller.signal }),
     );
     await reading.promise;
@@ -348,11 +311,11 @@ describe('sendMessage com Anexos', () => {
   it('Anexo que sumiu do navegador falha a resposta com storage_failed', async () => {
     const { store, deps } = await baseDeps();
     const provider = new ScriptedProvider(successEvents());
-    const first = await sendMessage({ ...deps, tools: null, provider }, ask({ attachments: [imageFile('i1')] }));
+    const first = await sendMessage({ ...deps, provider }, ask({ attachments: [imageFile('i1')] }));
     store.attachments.delete('i1');
 
     const retried = await retryMessage(
-      { ...deps, tools: null, provider },
+      { ...deps, provider },
       {
         conversationId: 'c1',
         messageId: first.message.id,

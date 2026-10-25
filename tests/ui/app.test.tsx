@@ -8,6 +8,7 @@ import type { Model } from '../../src/domain/model';
 import type { ChatProvider } from '../../src/ports/chat-provider';
 import { App } from '../../src/ui/App';
 import type { StreamEvent } from '../../src/domain/stream';
+import { WEB_SEARCH } from '../../src/domain/web';
 import {
   deferred,
   FailingProvider,
@@ -22,7 +23,8 @@ import {
   providersOf,
   replyEvents,
   ScriptedProvider,
-  usage,
+  round,
+  toolCall,
 } from '../helpers';
 
 interface MountOptions {
@@ -88,7 +90,7 @@ describe('App', () => {
 
     await expect.element(screen.getByText('Primeira pergunta', { exact: true })).toBeVisible();
     await expect.element(screen.getByText('Olá')).toBeVisible();
-    await expect.element(screen.getByTitle('10 tokens de entrada, 0 de saída')).toBeVisible();
+    await expect.element(screen.getByTitle('10 tokens de entrada, 5 de saída')).toBeVisible();
     await expect.element(screen.getByTitle(/até o modelo responder$/)).toBeVisible();
     await expect
       .element(screen.getByRole('button', { name: 'primeira pergunta', exact: true }))
@@ -98,24 +100,11 @@ describe('App', () => {
   it('mostra a Busca na resposta e abre as Fontes', async () => {
     const tools = new FakeWebTools();
     tools.searchAnswer = { hits: [hit('https://www.exemplo.com/cobre', 'Cobre hoje')] };
-    let rounds = 0;
-    const provider = new ScriptedProvider(async function* (): AsyncGenerator<StreamEvent> {
-      rounds += 1;
-      yield { type: 'started', model: 'claude-test', usage: usage(10, 0) };
-      if (rounds === 1) {
-        yield {
-          type: 'part_started',
-          index: 0,
-          part: { type: 'tool_call', callId: 't1', tool: 'web_search' },
-        };
-        yield { type: 'delta', index: 0, part: 'input', text: '{"query":"cobre"}' };
-        yield { type: 'part_finished', index: 0 };
-        yield { type: 'usage', usage: usage(10, 3), stopReason: 'tool_use' };
-      } else {
-        yield { type: 'delta', index: 0, part: 'text', text: 'O cobre subiu.' };
-        yield { type: 'usage', usage: usage(10, 4), stopReason: 'end_turn' };
-      }
-      yield { type: 'finished' };
+    const provider = new ScriptedProvider({
+      rounds: [
+        round(toolCall(0, 't1', WEB_SEARCH, '{"query":"cobre"}'), 'tool_use', 3),
+        replyEvents('O cobre subiu.'),
+      ],
     });
     const screen = await mount(() => provider, { tools });
     await connect(screen);
@@ -290,6 +279,7 @@ describe('App', () => {
       .element(screen.getByRole('button', { name: 'modelo: claude opus 5.5' }))
       .toBeVisible();
   });
+
 });
 
 type Screen = Awaited<ReturnType<typeof render>>;

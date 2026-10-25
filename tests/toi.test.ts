@@ -321,10 +321,13 @@ describe('createToi', () => {
     const delta = deferred();
     const release = deferred();
     const provider = new ScriptedProvider(async function* () {
-      yield* replyEvents().slice(0, 2);
-      delta.resolve();
-      await release.promise;
-      yield { type: 'finished' } as const;
+      for (const event of replyEvents()) {
+        if (event.type === 'finished') {
+          delta.resolve();
+          await release.promise;
+        }
+        yield event;
+      }
     });
     const toi = await createToi({ ...deps, providers: providersOf(() => provider) });
 
