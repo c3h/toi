@@ -2,7 +2,25 @@
   {
     "name": "JS inicial",
     "path": "dist/assets/index-*.js",
-    "limit": "150 kB",
+    "limit": "140 kB",
+    "gzip": true
+  },
+  {
+    "name": "CSS",
+    "path": "dist/assets/index-*.css",
+    "limit": "8 kB",
+    "gzip": true
+  },
+  {
+    "name": "Markdown",
+    "path": "dist/assets/Markdown-*.js",
+    "limit": "55 kB",
+    "gzip": true
+  },
+  {
+    "name": "Worker do Shiki",
+    "path": "dist/assets/highlight.worker-*.js",
+    "limit": "61 kB",
     "gzip": true
   }
 ]

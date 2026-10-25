@@ -68,6 +68,36 @@ describe('Prose', () => {
     expect(open.container.querySelectorAll('.token')).toHaveLength(0);
   });
 
+  it('colore as linguagens da lista pelos nomes do fence; fora dela, o código fica sem cor', async () => {
+    const tokens = async (lang: string, code: string) => {
+      const screen = await render(<Prose text={`\`\`\`${lang}\n${code}\n\`\`\``} open={false} />);
+      // `aria-busy` cai quando o worker responde, com ou sem destaque.
+      await expect
+        .poll(() => screen.container.querySelector('pre')?.getAttribute('aria-busy'))
+        .toBe('false');
+      expect(screen.container.querySelector('code')?.textContent).toBe(code);
+      return screen.container.querySelectorAll('.token').length;
+    };
+
+    expect(await tokens('py', 'def f(): return 1')).toBeGreaterThan(0);
+    expect(await tokens('zsh', 'echo "$HOME"')).toBeGreaterThan(0);
+    expect(await tokens('c++', 'int main() { return 0; }')).toBeGreaterThan(0);
+    expect(await tokens('Dockerfile', 'FROM node:22')).toBeGreaterThan(0);
+    // O Shiki tem COBOL, a lista não.
+    expect(await tokens('cobol', 'DISPLAY "OI".')).toBe(0);
+  });
+
+  it('bloco que muda de código não mostra os tokens do anterior', async () => {
+    const screen = await render(<Prose text={'```ts\nconst a = 1;\n```'} open={false} />);
+    await expect.poll(() => screen.container.querySelectorAll('.token').length).toBeGreaterThan(0);
+
+    // Tentar de novo reaproveita o bloco na mesma posição com outro código.
+    await screen.rerender(<Prose text={'```ts\nconst b = 2;\n```'} open={false} />);
+    expect(screen.container.querySelector('code')?.textContent).toBe('const b = 2;');
+    await expect.poll(() => screen.container.querySelectorAll('.token').length).toBeGreaterThan(0);
+    expect(screen.container.querySelector('code')?.textContent).toBe('const b = 2;');
+  });
+
   it('fecha o Markdown do bloco em Fluxo como ele vai ficar', async () => {
     const bold = await render(<Prose text={'texto **neg'} open />);
     await expect.poll(() => bold.container.querySelector('strong')?.textContent).toBe('neg');
