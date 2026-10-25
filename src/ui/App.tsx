@@ -71,12 +71,22 @@ const noticeFrom = (result: RunResult): Notice | null => {
   return null;
 };
 
+/** "Apagar tudo" remonta a tela: a abertura relê o armazenamento vazio, sem refazer os padrões à mão. */
 export const App = ({ toi }: { toi: Toi }) => {
+  const [generation, setGeneration] = useState(0);
+  return <Workspace key={generation} toi={toi} onErasedAll={() => setGeneration((n) => n + 1)} />;
+};
+
+const Workspace = ({ toi, onErasedAll }: { toi: Toi; onErasedAll: () => void }) => {
   // Um Provedor registrado por enquanto; a escolha entre vários entra com o segundo.
   const provider = toi.providers()[0]!;
   const [connected, setConnected] = useState(toi.connected());
   const [changingKey, setChangingKey] = useState(false);
   const [settings, setSettings] = useState<SettingsSection | null>(null);
+  // As escolhas gravadas que decidem o seletor; `failed` quando o armazenamento não as entrega.
+  const [choices, setChoices] = useState<'loading' | 'ready' | 'failed'>('loading');
+  // O cache de Modelos não se leu: é falha do armazenamento, não cache ausente.
+  const [cacheFailed, setCacheFailed] = useState(false);
   const [models, setModels] = useState<ModelsState>({ list: [], stale: null, refreshing: true });
   const [lastModel, setLastModel] = useState<ModelRef | null>(null);
   const [lastEffort, setLastEffort] = useState<Effort | null>(null);
@@ -94,26 +104,60 @@ export const App = ({ toi }: { toi: Toi }) => {
   useEffect(() => toi.watchConversations(setConversations), [toi]);
   useEffect(() => followSystemTheme(), []);
   useEffect(() => {
-    void toi.lastModel().then(setLastModel);
-    void toi.lastEffort().then(setLastEffort);
-    void toi.modelPicks().then(setModelPicks, (cause) =>
-      setModelPicksError({ kind: 'read', error: errorInfo(cause) }),
+    // Espera todas assentarem: falhar antes de os Modelos do seletor chegarem abriria
+    // Configurações com eles no padrão.
+    void Promise.allSettled([
+      toi.lastModel().then(setLastModel),
+      toi.lastEffort().then(setLastEffort),
+      // Os Modelos do seletor têm estado próprio de leitura falha, avisado em Configurações.
+      toi.modelPicks().then(setModelPicks, (cause) =>
+        setModelPicksError({ kind: 'read', error: errorInfo(cause) }),
+      ),
+    ]).then((reads) =>
+      setChoices(reads.every((read) => read.status === 'fulfilled') ? 'ready' : 'failed'),
     );
   }, [toi]);
 
+  // A abertura falha pelas escolhas ou pelo cache de Modelos, só depois de as escolhas assentarem.
+  const opening =
+    choices === 'loading' ? 'loading' : choices === 'failed' || cacheFailed ? 'failed' : 'ready';
+
+  // Uma carga de Modelos por vez: a nova aborta a anterior, que não chega à tela.
+  const modelsLoad = useRef<AbortController | null>(null);
+  useEffect(() => () => modelsLoad.current?.abort(), []);
+
   const loadModels = useCallback(
     async (refresh: boolean) => {
+      modelsLoad.current?.abort();
+      const controller = new AbortController();
+      modelsLoad.current = controller;
       setModels((current) => ({ ...current, refreshing: true }));
 
-      const cached = refresh ? null : await toi.models().catch(() => null);
+      let cached: Model[] | null = null;
+      if (!refresh) {
+        try {
+          cached = await toi.models();
+        } catch (cause) {
+          if (controller.signal.aborted) return;
+          // Sem cache a lista vem da API; com cache ilegível, a abertura para no bloqueio.
+          setCacheFailed(true);
+          setModels((current) => ({ ...current, stale: errorInfo(cause), refreshing: false }));
+          return;
+        }
+      }
+      if (controller.signal.aborted) return;
       if (cached) {
         setModels({ list: cached, stale: null, refreshing: false });
         return;
       }
 
       try {
-        setModels({ list: await toi.refreshModels(), stale: null, refreshing: false });
+        const list = await toi.refreshModels(controller.signal);
+        if (controller.signal.aborted) return;
+        setModels({ list, stale: null, refreshing: false });
       } catch (cause) {
+        // Abortada, quem abortou já cuida da tela; não há erro a mostrar.
+        if (controller.signal.aborted) return;
         // A lista anterior (o cache) segue valendo, marcada como desatualizada.
         const stale = errorInfo(cause);
         setModels((current) => ({ ...current, stale, refreshing: false }));
@@ -331,6 +375,8 @@ export const App = ({ toi }: { toi: Toi }) => {
         provider={provider}
         onCancel={connected ? () => setChangingKey(false) : undefined}
         onConnected={(fresh) => {
+          // A lista da Chave nova vale; uma atualização pela anterior não chega à tela.
+          modelsLoad.current?.abort();
           setModels({ list: fresh, stale: null, refreshing: false });
           setConnected(true);
           setChangingKey(false);
@@ -340,8 +386,12 @@ export const App = ({ toi }: { toi: Toi }) => {
     );
   }
 
+  // Até ler as escolhas e ter uma lista de Modelos (o cache ou, sem ele, a da API), só a casca: o
+  // seletor nasceria no padrão e trocaria, e o bloqueio de "nenhum modelo marcado" piscaria.
+  const loading = opening === 'loading' || (models.refreshing && list.length === 0);
+
   const blocker =
-    models.refreshing || list.length > 0
+    list.length > 0
       ? null
       : models.stale
         ? lower(models.stale.message)
@@ -375,7 +425,9 @@ export const App = ({ toi }: { toi: Toi }) => {
       )}
 
       <div className="flex min-h-0 min-w-0 flex-col">
-        {settings ? (
+        {/* Configurações esperam as escolhas gravadas, ou mostrariam as do padrão. Com a abertura
+            falha também abrem: dali dá para trocar a Chave ou apagar tudo. */}
+        {settings && opening !== 'loading' ? (
           <Suspense fallback={<div className="flex-1" />}>
             <Settings
               toi={toi}
@@ -391,12 +443,9 @@ export const App = ({ toi }: { toi: Toi }) => {
               onChangeKey={() => setChangingKey(true)}
               onKeyRemoved={() => setConnected(false)}
               onErasedAll={() => {
-                select(null);
-                setLastModel(null);
-                setLastEffort(null);
-                setModelPicks(toi.defaultModelPicks());
-                setModelPicksError(null);
-                setConnected(false);
+                // A tela remontada nasce no rascunho, sem a Conversa apagada.
+                selection.write(null);
+                onErasedAll();
               }}
               onClose={() => setSettings(null)}
             />
@@ -424,7 +473,26 @@ export const App = ({ toi }: { toi: Toi }) => {
               </h1>
             </header>
 
-            {blocker ? (
+            {opening === 'failed' ? (
+              <Blocked message="não deu para ler as configurações salvas neste navegador.">
+                <button
+                  type="button"
+                  className="text-accent hover:underline"
+                  onClick={() => location.reload()}
+                >
+                  recarregar
+                </button>
+                <button
+                  type="button"
+                  className="text-muted hover:text-accent"
+                  onClick={() => setSettings('top')}
+                >
+                  abrir configurações
+                </button>
+              </Blocked>
+            ) : loading ? (
+              <div className="flex-1" />
+            ) : blocker ? (
               <Blocked message={blocker}>
                 <button
                   type="button"

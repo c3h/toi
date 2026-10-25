@@ -4,6 +4,7 @@ import type { HistoryExport } from '../src/app/export';
 import { createToi, type ToiDeps } from '../src/app/toi';
 import { tinyfishInfo } from '../src/adapters/services/tinyfish/info';
 import { appError } from '../src/domain/error';
+import type { Model } from '../src/domain/model';
 import { DEFAULT_TOOL_SPACE } from '../src/domain/web';
 import type { StreamEvent } from '../src/domain/stream';
 import type { ChatProvider, ChatRequest } from '../src/ports/chat-provider';
@@ -50,7 +51,7 @@ describe('createToi', () => {
     const { credentials, deps } = await setup();
     const toi = await createToi(deps);
 
-    const models = await toi.connect('anthropic', '  sk-test  ');
+    const models = await toi.connect('anthropic', '  sk-test  ', signal);
 
     expect(models).toEqual([testModel]);
     expect(await credentials.get('anthropic')).toBe('sk-test');
@@ -66,12 +67,43 @@ describe('createToi', () => {
       ),
     });
 
-    await toi.connect('anthropic', 'sk-good');
+    await toi.connect('anthropic', 'sk-good', signal);
 
-    await expect(toi.connect('anthropic', 'sk-bad')).rejects.toMatchObject({ code: 'invalid_credential' });
+    await expect(toi.connect('anthropic', 'sk-bad', signal)).rejects.toMatchObject({ code: 'invalid_credential' });
 
     expect(await credentials.get('anthropic')).toBe('sk-good');
     expect(toi.connected()).toBe(true);
+  });
+
+  it('atualizar Modelos não grava o cache depois que a Chave troca, mesmo com a listagem resolvida', async () => {
+    const { settings, deps } = await setup();
+    const answered = deferred();
+    class LateListing extends ScriptedProvider {
+      calls = 0;
+
+      override async listModels(): Promise<Model[]> {
+        this.calls += 1;
+        // A resposta da atualização chega depois da troca, e o adaptador a entrega mesmo assim.
+        if (this.calls > 1) await answered.promise;
+        return this.models;
+      }
+    }
+    const fresh = makeModel('claude-sonnet-nova');
+    const toi = await createToi({
+      ...deps,
+      providers: providersOf((key) =>
+        key === 'sk-old' ? new LateListing([]) : new ScriptedProvider([], [fresh]),
+      ),
+    });
+    await toi.connect('anthropic', 'sk-old', signal);
+
+    // Ninguém aborta: quem protege o cache é o Toi, que sabe que a Chave trocou.
+    const refreshing = toi.refreshModels(signal);
+    await toi.connect('anthropic', 'sk-new', signal);
+    answered.resolve();
+
+    await expect(refreshing).rejects.toMatchObject({ name: 'AbortError' });
+    expect(await settings.models('anthropic')).toEqual([fresh]);
   });
 
   it('apagar tudo remove Conversas, Configurações e Chave e desconecta', async () => {
@@ -363,7 +395,7 @@ describe('createToi', () => {
     const connected = async (provider: ChatProvider) => {
       const { store, deps } = await setup();
       const toi = await createToi({ ...deps, providers: providersOf(() => provider) });
-      await toi.connect('anthropic', 'sk-test');
+      await toi.connect('anthropic', 'sk-test', signal);
       return { store, toi };
     };
 

@@ -68,8 +68,8 @@ export interface Toi {
   subscribe(listener: (message: Message) => void): () => void;
   /** Cache de Modelos dos Provedores conectados; `null` sem conexão ou se falta a listagem de algum. */
   models(): Promise<Model[] | null>;
-  /** Lista de novo em todos os Provedores conectados. */
-  refreshModels(signal?: AbortSignal): Promise<Model[]>;
+  /** Lista de novo em todos os Provedores conectados; a lista de uma Chave que saiu no meio não grava o cache. */
+  refreshModels(signal: AbortSignal): Promise<Model[]>;
   /** Default de uma Conversa nova. */
   lastModel(): Promise<ModelRef | null>;
   /** Default de uma Conversa nova; `null` até a pessoa escolher um. */
@@ -101,7 +101,7 @@ export interface Toi {
   renameConversation(id: ConversationId, title: string): Promise<Conversation | null>;
   deleteConversation(id: ConversationId): Promise<void>;
   /** Valida e grava a Chave; devolve os Modelos de todos os Provedores conectados. */
-  connect(provider: ProviderId, apiKey: string, signal?: AbortSignal): Promise<Model[]>;
+  connect(provider: ProviderId, apiKey: string, signal: AbortSignal): Promise<Model[]>;
   disconnect(provider: ProviderId): Promise<void>;
   eraseConversations(): Promise<void>;
   eraseAll(): Promise<void>;
@@ -246,12 +246,16 @@ export const createToi = async (deps: ToiDeps): Promise<Toi> => {
 
     models: cachedModels,
 
-    async refreshModels(signal = new AbortController().signal) {
+    async refreshModels(signal) {
       if (connections.size === 0) throw appError('not_connected');
 
       const lists = await Promise.all(
         [...connections].map(async ([id, provider]) => {
           const models = await provider.listModels(signal);
+          // A Chave trocou ou saiu durante a listagem: a lista dela não grava por cima da atual.
+          if (connections.get(id) !== provider) {
+            throw new DOMException('A Chave mudou durante a listagem.', 'AbortError');
+          }
           await cacheModels(id, models);
           return models;
         }),
@@ -304,7 +308,7 @@ export const createToi = async (deps: ToiDeps): Promise<Toi> => {
       return guarded(() => deps.store.deleteConversation(id), id);
     },
 
-    async connect(providerId, apiKey, signal = new AbortController().signal) {
+    async connect(providerId, apiKey, signal) {
       const adapter = adapters.get(providerId);
       if (!adapter) throw new Error(`Provedor ${providerId} não registrado.`);
 
@@ -334,7 +338,7 @@ export const createToi = async (deps: ToiDeps): Promise<Toi> => {
         connections.delete(providerId);
       }),
 
-    async connectService(apiKey, signal = new AbortController().signal) {
+    async connectService(apiKey, signal) {
       const key = apiKey.trim();
       if (!key) throw appError('tool_invalid_credential');
 
