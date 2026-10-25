@@ -17,8 +17,8 @@ import type { ConversationStore } from '../ports/conversation-store';
  * domínio: acrescentar um valor é compatível, como as Partes `file`, `tool_call`,
  * `tool_result` e `redacted_reasoning`. Mudança incompatível sobe `version`.
  */
-export const HISTORY_EXPORT_FORMAT = 'toi.history';
-export const HISTORY_EXPORT_VERSION = 1;
+const HISTORY_EXPORT_FORMAT = 'toi.history';
+const HISTORY_EXPORT_VERSION = 1;
 
 export type ExportedAttachment =
   | {
@@ -145,12 +145,7 @@ const exportPart = async (part: Part, bytes: Bytes): Promise<ExportedPart> => {
       return { type: 'file', attachment: exportAttachment(part.attachment), data };
     }
     case 'tool_call':
-      return {
-        type: 'tool_call',
-        callId: part.callId,
-        tool: part.tool,
-        input: structuredClone(part.input),
-      };
+      return { type: 'tool_call', callId: part.callId, tool: part.tool, input: part.input };
     case 'tool_result':
       return {
         type: 'tool_result',
