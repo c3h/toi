@@ -42,20 +42,21 @@ src/
     http/        # sse, fetchOrThrow, Retry-After
     protocols/   # um formato de API por pasta; anthropic-messages: request, stream, error, types
     providers/   # um Provedor por pasta; anthropic: info, fetch, models, provider
-    services/    # um Serviço de Ferramentas por pasta; tinyfish: info, tools
+    services/    # o Serviço das Ferramentas; tinyfish: info, tools
     storage/     # db, records, conversations, credentials, settings
     locks/       # web (navigator.locks)
     tokens/      # heuristic
-  app/           # flow, toi, locks, connect, conversations, erase, export, send-message, build-request,
-                 # web-tools (definições, elegibilidade aplicada, texto ao Modelo, tetos); sem React
+  app/           # flow, flusher, toi, locks, recover-interrupted, conversations, export, send-message,
+                 # build-request, name-conversation, web-tools (definições, elegibilidade aplicada,
+                 # texto ao Modelo, tetos); sem React
   ui/            # React + Tailwind: App, Onboarding, Sidebar, Chat, Prose, Settings (lazy), markdown/ (lazy),
                  # attachments/ (rascunho, chips e diálogo; o preparo é lazy)
   main.tsx       # composition root: injeta os adaptadores concretos em `createToi`
 ```
 
-`Flow` (`app/flow.ts`) é o módulo do Fluxo em voo e `Toi` (`app/toi.ts`) é a fachada do app; a UI depende só dos dois. Responsabilidades e porquê em [ADR 0005](adr/0005-flow-as-module.md).
+`Flow` (`app/flow.ts`) é o módulo do Fluxo em voo e `Toi` (`app/toi.ts`) é a fachada do app, que também conecta as Chaves e compõe as limpezas; a UI depende só dos dois. Responsabilidades e porquê em [ADR 0005](adr/0005-flow-as-module.md).
 
-**Regra de dependência:** `ui → app → ports ← adapters`; todos podem importar `domain`; `domain` não importa ninguém. `app` não importa `adapters` e recebe as implementações por injeção. `main.tsx` é o composition root e injeta as implementações concretas; cada Provedor entra em `Toi` como um `ProviderAdapter` (`info` + `create(key)`) na lista `providers`, e cada Serviço como um `ServiceAdapter` na lista `services`. Provedor e Protocolo são papéis separados dentro de `adapters` ([ADR 0008](adr/0008-provider-and-protocol.md)).
+**Regra de dependência:** `ui → app → ports ← adapters`; todos podem importar `domain`; `domain` não importa ninguém. `app` não importa `adapters` e recebe as implementações por injeção. `main.tsx` é o composition root e injeta as implementações concretas; cada Provedor entra em `Toi` como um `ProviderAdapter` (`info` + `create(key)`) na lista `providers`, e o Serviço como um `ServiceAdapter` em `service`, um só: um segundo Serviço pede decisão (`AGENTS.md`). Provedor e Protocolo são papéis separados dentro de `adapters` ([ADR 0008](adr/0008-provider-and-protocol.md)).
 
 As portas existem por fronteiras reais: `ChatProvider` isola o HTTP de terceiro e permite um segundo Provedor, e `ProviderInfo` é tudo que a UI sabe dele; `WebTools` isola o Serviço das Ferramentas, e `ServiceInfo` é tudo que a UI sabe dele; o storage permite trocar IndexedDB ou usar memória em teste; `Locks` coordena abas por Web Locks; `TokenEstimator` permite substituir a heurística pela contagem exata sem tocar no domínio; `SettingsStore` guarda o cache de Modelos, o último Modelo e o último Esforço, quais Modelos o seletor oferece, o espaço das Rodadas e o Modelo do Título.
 
@@ -84,7 +85,7 @@ streaming ── Rodada fecha, stop ≠ tool_use ──────────�
 
 Decisão em [ADR 0010](adr/0010-web-tools-via-tinyfish.md). Com o Serviço conectado no início do envio, o `ChatRequest` leva as definições de Busca e Leitura, com a data e o idioma do início do turno. O prefixo (histórico selecionado, Anexos e Ferramentas) é montado uma vez; cada Rodada envia o prefixo mais as Rodadas já fechadas da resposta, com o raciocínio (`continuationOf`).
 
-- `domain/round.ts` (`applyEvent`) aplica os Eventos à Mensagem, aceitando os blocos em qualquer ordem: o texto aparece a cada delta, o raciocínio só depois de terminado e assinado, e a chamada só com o JSON do input fechado num objeto.
+- `domain/round.ts` (`applyEvent`) aplica os Eventos à Mensagem, aceitando os blocos em qualquer ordem: o texto aparece a cada delta, o raciocínio só depois de terminado e assinado, e a chamada só com o JSON do input fechado num objeto. Um delta só vale no bloco que um `part_started` abriu.
 - As chamadas de uma Rodada correm em paralelo, com o `signal`. O laço espera todas, mesmo depois de um abort, antes de seguir ou soltar o lock. Falha do Serviço vira `tool_result` com erro tipado e a resposta segue; o Modelo lê uma dica em inglês, nunca a mensagem crua.
 - Uma chamada só sai se um resultado no teto ainda cabe no espaço das Rodadas, lido das Configurações no início do envio, guardando `max_tokens` para a Rodada que conclui (§7, Crescimento do contexto); a que não cabe recebe `tool_call_limit`. A saída do Modelo conta pelo uso informado, porque o raciocínio volta inteiro mesmo com o texto vazio. Rodadas que passam do espaço fecham em `tool_limit` antes da próxima.
 - Uma URL de Leitura sai na forma comparada (sem fragmento, em `https`), nunca como o Modelo a escreveu; repetidas viram uma.
@@ -106,7 +107,7 @@ Decisão em [ADR 0010](adr/0010-web-tools-via-tinyfish.md). Com o Serviço conec
 
 ### Identidade e ordem
 
-Cada Mensagem tem `seq`, um inteiro monotônico por Conversa, atribuído pelo app sob o lock da Conversa — duas abas não calculam o mesmo `seq`. O Dexie indexa `conversationId` e `[conversationId+seq]`; a leitura ordena por `seq`. `createdAt` serve para exibir, não para ordenar.
+Cada Mensagem tem `seq`, um inteiro monotônico por Conversa, atribuído pelo app sob o lock da Conversa — duas abas não calculam o mesmo `seq`. O Dexie indexa `[conversationId+seq]`: a mesma chave lê as Mensagens de uma Conversa em ordem de `seq` e as apaga em cascata. `createdAt` serve para exibir, não para ordenar.
 
 O Título nasce derivado da primeira Mensagem do user: os primeiros ~60 caracteres, cortados no limite de palavra. Quando a primeira resposta termina `complete`, o Modelo do Título o substitui por um nome curto, sem passar por cima de um Título que a pessoa renomeou (`titleSource`); em qualquer falha fica o derivado ([ADR 0011](adr/0011-generated-title.md)).
 
@@ -148,11 +149,12 @@ Regras do adaptador:
 | `ChatRequest.system` | `system`, só quando definido |
 | `ChatRequest.effort` | `output_config.effort`, sempre |
 | `ChatRequest.reasoning` `off` | `thinking` que o Modelo aceita para desligar (`providers/anthropic/thinking.ts`, passado ao Protocolo); sem regra, nenhum |
+| todo `ChatRequest` | `cache_control: { type: 'ephemeral' }` no topo, sempre: cache automático no TTL padrão, constante do Protocolo |
 | `delta` de texto | `content_block_delta` → `text_delta` |
 | `usage` | `message_start.usage` + `message_delta.usage` |
 | `stopReason` | `message_delta.delta.stop_reason` |
 
-A porta carrega Partes, não texto ([ADR 0003](adr/0003-message-as-parts-and-normalized-events.md)): os Anexos, o raciocínio e as Ferramentas entraram como Partes novas. Os Anexos vão na Mensagem do user antes do texto. `system` só é preenchido no pedido do Título; system prompt é sempre campo próprio, nunca Mensagem. A porta não tem parâmetros de amostragem. O Esforço vai em todo envio e regula quanto o Modelo raciocina; `reasoning: 'off'`, só no pedido do Título, desliga o raciocínio onde o Modelo aceita; o raciocínio é gravado, mas não aparece (§1). As Ferramentas vão sem `eager_input_streaming`: os inputs são curtos, e sem ele a API valida cada parâmetro antes de emiti-lo.
+A porta carrega Partes, não texto ([ADR 0003](adr/0003-message-as-parts-and-normalized-events.md)): os Anexos, o raciocínio e as Ferramentas entraram como Partes novas. Os Anexos vão na Mensagem do user antes do texto. `system` só é preenchido no pedido do Título; system prompt é sempre campo próprio, nunca Mensagem. A porta não tem parâmetros de amostragem. O Esforço vai em todo envio e regula quanto o Modelo raciocina; `reasoning: 'off'`, só no pedido do Título, desliga o raciocínio onde o Modelo aceita; o raciocínio é gravado, mas não aparece (§1). As Ferramentas vão sem `eager_input_streaming`: os inputs são curtos, e sem ele a API valida cada parâmetro antes de emiti-lo. Todo pedido liga o cache de prompt; o que mantém o prefixo estável e as perdas aceitas estão no [ADR 0012](adr/0012-prompt-caching.md).
 
 A Anthropic usa o Protocolo `anthropic-messages`; `anthropic-version` é do Protocolo, `x-api-key` e o header de acesso pelo navegador são do Provedor.
 
@@ -165,7 +167,7 @@ anthropic-version: 2026-10-21
 anthropic-dangerous-direct-browser-access: true
 content-type: application/json
 
-{ model, max_tokens, messages, stream: true, output_config: { effort }, system?, thinking?, tools? }
+{ model, max_tokens, messages, stream: true, cache_control: { type: 'ephemeral' }, output_config: { effort }, system?, thinking?, tools? }
 ```
 
 `max_tokens` é obrigatório. Default: `Math.min(8192, model.max_tokens ?? 8192)`.
@@ -176,11 +178,11 @@ Modelos:
 GET https://api.anthropic.com/v1/models?limit=1000
 ```
 
-Seguimos `has_more`/`last_id` por até 20 páginas e descartamos `lifecycle` diferente de `active` quando presente e os Modelos cujo `capabilities.effort` não aceita a escala inteira de Esforço: sem eles não há nível que falte a um Modelo nem envio sem Esforço. Guardamos `id`, `display_name`, `max_tokens`, `max_input_tokens` e `created_at`, mais o Provedor, a família e se o Modelo responde sem raciocinar (`reasoningOff`). Nenhum ID de Modelo é fixo no código; a identidade de um Modelo inclui o Provedor ([ADR 0008](adr/0008-provider-and-protocol.md)).
+Seguimos `has_more`/`last_id` por até 20 páginas e descartamos `lifecycle` diferente de `active` quando presente e os Modelos cujo `capabilities.effort` não aceita a escala inteira de Esforço: sem eles não há nível que falte a um Modelo nem envio sem Esforço. Guardamos `id`, `display_name`, `max_tokens`, `max_input_tokens` e `created_at`, mais o Provedor, a família e se o Modelo responde sem raciocinar (`reasoningOff`). A forma de cada página é validada: `data`, `has_more` e, quando há outra página, `last_id`; em cada Modelo, `id`, `display_name`, `created_at` e a árvore inteira de `capabilities.effort`. Fora do contrato, a listagem falha com resposta ilegível, sem nome, data ou lista inventados. `max_tokens` e `max_input_tokens` podem faltar e viram `null` (§7, Crescimento do contexto); presentes, são inteiros positivos. Nenhum ID de Modelo é fixo no código; a identidade de um Modelo inclui o Provedor ([ADR 0008](adr/0008-provider-and-protocol.md)).
 
 O seletor não mostra a lista inteira. A família vem do Provedor; na Anthropic é o primeiro trecho só de letras do id depois de `claude` (`providers/anthropic/models.ts`). A escolha (`settings.modelPicks`) marca famílias, que acompanham a versão mais recente, e Modelos, que fixam uma versão, ambos com Provedor. O padrão são as famílias que cada Provedor sugere no descritor (Sonnet e Haiku na Anthropic), e Configurações lista todas as famílias para marcar outras. Se nenhuma marcação existe para a Chave, o Chat dá lugar ao estado explícito "nenhum modelo marcado existe para esta chave", com o atalho para escolher; não há troca silenciosa por outro Modelo. Um Modelo desmarcado que uma Conversa usa continua aparecendo nela. Falha ao ler ou gravar a escolha aparece em Configurações; gravar é otimista e volta ao estado salvo se falhar.
 
-A lista fica em cache em `settings`, uma por Provedor (`toi.models()` junta as dos conectados), gravada por `connect` e por `toi.refreshModels()`; a abertura usa o cache e só lista na API quando ele não existe. Se a listagem falhar, a UI mostra o erro com "tentar de novo" e "trocar Chave" — não há caminho silencioso. Se um refresh falha e existe cache, a lista anterior continua valendo e Configurações a marca como desatualizada, com o erro.
+A lista fica em cache em `settings`, uma por Provedor (`toi.models()` junta as dos conectados), gravada por `connect` e por `toi.refreshModels()`; a abertura usa o cache e só lista na API quando ele não existe. Cache que não se lê é falha do armazenamento, não ausência: a abertura para no bloqueio da §9, sem listar na API. Se a listagem falhar, a UI mostra o erro com "tentar de novo" e "trocar Chave" — não há caminho silencioso. Se um refresh falha e existe cache, a lista anterior continua valendo e Configurações a marca como desatualizada, com o erro. `connect`, `connectService` e `refreshModels` exigem o `signal` de quem chama: o App segura um `AbortController` por carga da lista, e uma carga nova ou a conexão de uma Chave nova aborta a anterior, que não vira erro nem chega à tela. O cache não depende de quem chama abortar a tempo: entre a listagem e a gravação, `refreshModels` confere se a conexão que listou ainda é a do Provedor e, se a Chave trocou ou saiu no meio, rejeita como abort sem gravar, nem quando a resposta chega depois. Entrar em "trocar chave" e desistir ("manter a chave atual") deixa a carga em curso terminar.
 
 ### Primeira execução
 
@@ -205,7 +207,7 @@ Contrato em `src/ports/web-tools.ts`: `search`, `fetch` e `verify`. O adaptador 
 
 ## 6. Persistência
 
-IndexedDB via Dexie. O schema está em `src/adapters/storage/db.ts`: `conversations` indexa `id` e `updatedAt`; `messages` indexa `id`, `conversationId`, `[conversationId+seq]` e `status`; `attachments` indexa `id` e `conversationId`; `settings` indexa `key`; `credentials` indexa `provider`, que guarda o dono da Chave: Provedor ou Serviço. O nome ficou porque trocar o keyPath na mesma versão faz toda gravação falhar no Dexie.
+IndexedDB via Dexie. O schema está em `src/adapters/storage/db.ts`: `conversations` indexa `id` e `updatedAt`; `messages` indexa `id`, `[conversationId+seq]` e `status`; `attachments` indexa `id` e `conversationId`; `settings` indexa `key`; `credentials` indexa `provider`, que guarda o dono da Chave: Provedor ou Serviço. O nome ficou porque trocar o keyPath na mesma versão faz toda gravação falhar no Dexie.
 
 | Store | Conteúdo | Nunca contém |
 |---|---|---|
@@ -225,7 +227,7 @@ IndexedDB via Dexie. O schema está em `src/adapters/storage/db.ts`: `conversati
 
 **Seleção de Conversa:** estado efêmero da UI, espelhado em `sessionStorage` para sobreviver a reload. Não é `settings`: duas abas podem ter seleções diferentes.
 
-**Modelo e Esforço:** `conversation.provider` + `conversation.model` + `conversation.effort` são a fonte da verdade. Os seletores mudam a Conversa atual (`toi.changeModel`/`toi.changeEffort`, sem mexer em `updatedAt`); a resposta grava o Esforço pedido, como grava o Modelo. `settings.lastModel`, também com Provedor, e `settings.lastEffort` só definem o default de uma Conversa nova: são gravados a cada envio e a cada troca numa Conversa; no rascunho, a troca vale até o primeiro envio gravá-la. Falhar ao gravá-los não impede o envio. Sem `lastEffort`, a Conversa nova começa no menor Esforço.
+**Modelo e Esforço:** `conversation.provider` + `conversation.model` + `conversation.effort` são a fonte da verdade. Os seletores mudam a Conversa atual (`toi.changeModel`/`toi.changeEffort`, sem mexer em `updatedAt`); a resposta grava o Esforço pedido, como grava o Modelo. `settings.lastModel`, também com Provedor, e `settings.lastEffort` só definem o default de uma Conversa nova: são gravados a cada envio e a cada troca numa Conversa; no rascunho, a troca vale até o primeiro envio gravá-la. Falhar ao gravá-los não impede o envio. Sem `lastEffort`, a Conversa nova começa no menor Esforço. Ausência não é falha: quando a abertura não consegue lê-los ou ler o cache de Modelos, a tela fica no bloqueio da §9 em vez de seguir com o padrão.
 
 **Tema:** preferência visual desta máquina em `localStorage` (`toi:theme`), lida por `public/theme.js` antes do primeiro paint — IndexedDB é assíncrono e o tema piscaria. Não é dado de Conversa; "apagar tudo" também o limpa.
 
@@ -239,7 +241,7 @@ IndexedDB via Dexie. O schema está em `src/adapters/storage/db.ts`: `conversati
 
 ## 7. Erros
 
-Classificação por HTTP status; `error.type` reforça 429/529 e eventos de erro. Texto só como fallback documentado.
+Classificação por HTTP status; `error.type` reforça 429/529 e classifica os eventos de erro, pela mesma tabela (`protocols/anthropic-messages/error.ts`), em que tipo desconhecido é `unknown`. Corpo sem envelope de erro deixa o status decidir, com o `statusText` como detalhe. Texto só como fallback documentado.
 
 | Código | Origem | Ação de UI |
 |---|---|---|
@@ -255,12 +257,11 @@ Classificação por HTTP status; `error.type` reforça 429/529 e eventos de erro
 | `overloaded` | 529 ou `overloaded_error` | Botão repetir |
 | `api_error` | 5xx | Botão repetir |
 | `unreachable` | `TypeError` no fetch, offline, CORS bloqueado ou Fluxo encerrado sem `finished` | Botão repetir |
-| `aborted` | `AbortError` | Estado `interrupted` |
 | `not_connected` | `send`/`retry` sem Chave | Abrir onboarding |
 | `flow_busy` | `send`/`retry`/apagar com Fluxo em voo ou limpeza em andamento, nesta ou em outra aba | Avisar; na própria aba o composer já fica desabilitado |
 | `storage_failed` | IndexedDB recusou o flush final (`RunResult.persistError`) ou um Anexo do histórico sumiu do store | Avisar que a resposta não foi salva; Anexo sumido falha a resposta |
 | `storage_full` | `QuotaExceededError` ao gravar o envio (`startTurn`) | Avisar; texto e Anexos voltam ao composer |
-| `unknown` | qualquer outro, inclusive chamada de Ferramenta quebrada pelo Provedor | Detalhe técnico |
+| `unknown` | qualquer outro, inclusive chamada de Ferramenta quebrada pelo Provedor e resposta ilegível ou fora do contrato (stream, lista de Modelos) | Detalhe técnico |
 
 Erros das Ferramentas ficam no `tool_result` da chamada e não fecham a Mensagem; só `tool_limit` fecha. A linha da chamada mostra a mensagem.
 
@@ -310,15 +311,22 @@ Toda Mensagem reenvia o histórico, com os Anexos e, com Ferramentas, os resulta
 
 Orçamento da v1. O que já é medível passa por `npm run size`; o resto são critérios de aceite da UI:
 
-- **JS inicial ≤ 150 KB gzip**, medido com `size-limit` no build de produção; o gate local falha acima. Markdown, Shiki e o painel de Configurações ficam em chunks lazy e não entram na conta.
+- **Bytes com gate:** `size-limit` mede o gzip de quatro arquivos do build de produção, cada um com uma folga pequena sobre o medido ao fixá-lo (os números estão em `.size-limit.json`), que absorve o bump de uma dependência, não uma dependência ou um recurso novo: crescer além dela vira decisão, e o limite sobe no mesmo PR que diz por quê. Cada entrada é um glob, e glob sem arquivo falha o gate, então um chunk renomeado não sai da conta em silêncio.
+  - **JS inicial** (`index-*.js`): React, Dexie e o app; nada aparece antes dele.
+  - **CSS** (`index-*.css`): bloqueia o render; inclui os `@font-face` (§11).
+  - **Markdown** (`Markdown-*.js`): react-markdown e remark-gfm. Fica fora do inicial, mas é pré-carregado no idle em todo mount do Chat, então toda sessão baixa.
+  - **Worker do Shiki** (`highlight.worker-*.js`): `shiki/core`, o engine de regex e os dois temas, baixados no primeiro bloco de código fechado. As gramáticas (`lang-*.js`) ficam fora: cada uma só baixa no primeiro uso da linguagem. O prefixo `lang-` também impede que, no macOS e no Windows, onde o glob do size-limit não diferencia maiúsculas, a gramática `markdown-*.js` entre na conta do `Markdown-*.js`.
+  - Configurações e o preparo de Anexos ficam fora: só baixam quando a pessoa abre as Configurações ou anexa o primeiro arquivo.
 - **Nenhuma long task > 50 ms durante um Fluxo de 500 deltas**, medido com `PerformanceObserver` numa página de teste, sem captura de trace do Playwright (os snapshots executam trabalho adicional na página); deltas são acumulados em buffer e aplicados ao React no máximo uma vez por frame (rAF).
-- Só a Mensagem em Fluxo re-renderiza; a lista é memoizada por id + estado; o scroll acompanha o fim apenas se a pessoa já estava no fim.
+- **Abertura sem piscar:** até ler o último Modelo, o último Esforço e os Modelos do seletor, e ter uma lista de Modelos (o cache ou, sem ele, a da API), o App mostra só a casca; o seletor nasceria no padrão e trocaria, e o bloqueio de "nenhum modelo marcado" piscaria. Se o armazenamento não entrega o último Modelo, o último Esforço ou o cache de Modelos, a tela de bloqueio oferece recarregar e abrir Configurações; ela só aparece depois que as três escolhas gravadas assentam, para Configurações não abrirem com os Modelos do seletor no padrão. Configurações não dependem do último Modelo nem do Esforço e abrem com a abertura falha: dali dá para trocar a Chave ou apagar tudo, que esvazia o armazenamento e remonta a tela: a abertura relê o armazenamento vazio e o bloqueio acaba. A leitura falha dos Modelos do seletor tem estado próprio, o padrão avisado em Configurações.
+- Só a Mensagem em Fluxo re-renderiza: a lista é memoizada por id + estado, e os handlers que o App passa ao Chat têm identidade estável (`useCallback` com um ref do que leem), senão cada render do App invalidaria a memoização de todas as Mensagens. O scroll acompanha o fim apenas se a pessoa já estava no fim.
+- **Mensagens fora da tela:** cada uma tem `content-visibility: auto` (`ui/styles.css`) e, até aparecer pela primeira vez, reserva a altura média medida do papel; depois, a que teve. A média, acima da mediana, faz o fim encolher no caminho de "ir para o fim", e a rolagem suave para nele. Quando o fim anda mesmo assim, com Mensagens mais altas que a reserva, cada `scrollend` antes dele rola de novo, até a pessoa rolar por conta própria. Medido ao implementar, abrir uma Conversa de 600 Mensagens caiu de 63 para 3 ms de layout e de ~720 para ~560 ms de trabalho na main thread.
 - **Markdown em Fluxo por blocos:** o texto é dividido em blocos de nível superior; blocos fechados são memoizados e só o último é reprocessado a cada frame. Reprocessar o texto inteiro por frame cresce com o tamanho da resposta e estoura o orçamento de long task.
 - **Revelação do Fluxo:** o Provedor entrega em rajadas (token isolado, silêncio, um monte de deltas). A tela corre um quarto de segundo atrás da chegada, na velocidade em que o texto chega, e espalha cada rajada pelo silêncio anterior; fechada `complete`, o que falta aparece em até 400 ms. Aba oculta, movimento reduzido, `interrupted` e `failed` mostram tudo de uma vez. No bloco em curso, `remend` fecha o Markdown incompleto e cada palavra nova entra com fade de opacidade; o rodapé de uso e o copiar esperam o texto inteiro. O cursor só aparece com o Fluxo aberto e nada correndo (antes do primeiro token ou com o texto parado há 400 ms): enquanto o texto corre, a entrada das palavras já marca onde ele está.
 - **Anexos fora do caminho inicial:** o preparo (`ui/attachments/prepare.ts`, com a contagem de páginas) é um chunk carregado no primeiro Anexo, e a imagem é reduzida por `OffscreenCanvas`. A leitura dos bytes no envio é assíncrona; medido ao implementar, enviar 20 MB não gerou long task, por isso o corpo da requisição continua uma string só.
-- **Shiki enxuto:** `shiki/core` com o engine de regex em JavaScript (sem wasm) e grammars carregadas sob demanda; o highlight roda quando o bloco de código fecha, nunca a cada delta.
+- **Shiki num worker:** o highlight roda quando o bloco de código fecha, nunca a cada delta, num Web Worker de módulo (`ui/markdown/highlight.worker.ts`), onde a tokenização sai em série sem que um bloco de gramática já carregada espere outra baixar; a main thread manda o código e recebe só o texto e as cores de cada token. Até o worker responder, o bloco fica cru e com `aria-busy`. O worker é da própria origem, então o `script-src 'self'` da CSP (§8) basta. Ele leva `shiki/core` com o engine de regex em JavaScript (sem wasm), os dois temas usados e uma lista curada de linguagens com os nomes comuns do fence, cada gramática num chunk baixado no primeiro uso; fora da lista (`ui/markdown/languages.ts`) o código fica sem destaque e o worker nem nasce. Medido ao implementar, fechar um bloco de 200 linhas deixou de gerar uma long task de 133 ms, e um de 500, de 246 ms; com CPU 4×, o Fluxo de 500 deltas deixou de gerar uma de ~100 ms, e o que sobra num bloco grande é montar os `span` dos tokens (~100 ms). O deploy caiu de 338 para 91 arquivos e de 10,6 para 4,0 MB.
 
-Implementação: `ui/use-messages.ts` junta deltas por frame; `ui/reveal.ts` decide quanto do texto está à vista e `ui/use-reveal.ts` roda um rAF por Mensagem enquanto há o que revelar; `ui/blocks.ts` divide o Markdown em blocos, cortando em linha em branco fora de bloco de código e sem separar continuação recuada de lista; `ui/Prose.tsx` memoiza cada bloco; `ui/markdown/Markdown.tsx` cura o bloco em curso e põe cada palavra num `span` (as chaves por posição do react-markdown mantêm as que já estavam, então só as novas animam). Markdown, Shiki, Configurações e o preparo de Anexos são quatro chunks separados. Cada deploy apaga os chunks anteriores, então numa aba aberta antes dele o que ainda não baixou falha: o Markdown já vem pré-carregado no idle, o Shiki cai em código sem destaque, as Configurações mostram a tela de bloqueio com recarregar e o preparo recusa o arquivo como `not_loaded`. A long task é medida em `tests/e2e/performance.spec.ts` contra o build de produção, com os chunks lazy já carregados. Tempo de primeira interação não é orçamento: depende da rede e da máquina. O que controlamos é bytes, trabalho de main thread e número de re-renders.
+Implementação: `ui/use-messages.ts` junta deltas por frame; `ui/reveal.ts` decide quanto do texto está à vista e `ui/use-reveal.ts` roda um rAF por Mensagem enquanto há o que revelar; `ui/blocks.ts` divide o Markdown em blocos, cortando em linha em branco fora de bloco de código e sem separar continuação recuada de lista; `ui/Prose.tsx` memoiza cada bloco; `ui/markdown/Markdown.tsx` cura o bloco em curso e põe cada palavra num `span` (as chaves por posição do react-markdown mantêm as que já estavam, então só as novas animam). Markdown, Configurações e o preparo de Anexos são três chunks separados; o Shiki é um worker, com uma gramática por chunk. Cada deploy apaga os arquivos anteriores, então numa aba aberta antes dele o que ainda não baixou falha: o Markdown já vem pré-carregado no idle; o worker que não baixa deixa o código sem destaque até recarregar, sem ser pedido de novo, e a gramática que não baixa, só a linguagem dela; as Configurações mostram a tela de bloqueio com recarregar e o preparo recusa o arquivo como `not_loaded`. A long task é medida em `tests/e2e/performance.spec.ts` contra o build de produção, com os chunks lazy já carregados. Tempo de primeira interação não é orçamento: depende da rede e da máquina. O que controlamos é bytes, trabalho de main thread e número de re-renders.
 
 ## 10. Testes
 
@@ -335,27 +343,27 @@ Implementação: `ui/use-messages.ts` junta deltas por frame; `ui/reveal.ts` dec
 | `app/recover-interrupted` | lock livre, lock ocupado, Mensagem fechada entre listar e travar | clock fixo + store e locks em memória |
 | `adapters/locks` | exclusive, shared e a soltura assíncrona | o mesmo contrato contra o `WebLocks` sobre o `navigator.locks` real do Node e contra o `MemoryLocks` dos testes, que o espelha |
 | `app/export` | Fluxo em voo, Parte `file` com os bytes | store em memória |
-| `app/toi`/`connect` | validar antes de gravar (Provedor e Serviço), Chave anterior preservada, remover só a Chave do Serviço, apagar só a Conversa em voo, recusar envio durante apagar tudo, recusar limpeza com Fluxo em outra aba, exportar no formato `toi.history` sem a Chave | fakes de store, credencial, settings e Provedor; um caso com Web Locks reais |
+| `app/toi` | validar antes de gravar (Provedor e Serviço), Chave anterior preservada, remover só a Chave do Serviço, apagar só a Conversa em voo, recusar envio durante apagar tudo, recusar limpeza com Fluxo em outra aba, exportar no formato `toi.history` sem a Chave, atualização de Modelos sem gravar o cache depois de a Chave trocar | fakes de store, credencial, settings e Provedor; um caso com Web Locks reais |
 | `ui` (puro) | divisão em blocos, segmentos de texto e Ferramenta, a mescla entre store e Fluxo local, a revelação contra traces de rajada e a contagem de páginas de PDF | Vitest em Node (`tests/ui-pure.test.ts`, `tests/reveal.test.ts`, `tests/pdf-pages.test.ts`) |
 | `ui/attachments` (preparo) | rotação EXIF sem metadados, redução, PNG ou JPEG, pixels demais, formato que o navegador não abre, texto UTF-8 | Vitest em modo browser no Chromium (`tests/ui/prepare.test.tsx`) |
-| `ui` (componentes) | Markdown seguro (sem HTML cru, links, imagens, `javascript:`), highlight só em bloco fechado, Markdown curado e palavras estáveis no bloco em curso, rodapé só com a resposta inteira, onboarding, enviar, parar com esc, shift+enter, linha da Busca com as Fontes, apagar com confirmação, anexar por clipe, colar e soltar, Anexo recusado, `storage_full` devolvendo o rascunho | Vitest em modo browser no Chromium (`tests/ui/`), com `createToi` real sobre stores em memória |
-| E2E | enviar, parar e tentar de novo, recarregar no meio do Fluxo, duas abas, orçamento de long task da §9, Anexos depois de recarregar e tentar de novo com eles | Playwright contra `vite preview` do build (`tests/e2e/`); só `fetch` para a Anthropic é simulado, o resto é o navegador real |
+| `ui` (componentes) | Markdown seguro (sem HTML cru, links, imagens, `javascript:`), highlight só em bloco fechado e pelos nomes do fence da lista curada, Markdown curado e palavras estáveis no bloco em curso, rodapé só com a resposta inteira e com a parte do cache, onboarding, enviar, parar com esc, shift+enter, linha da Busca com as Fontes, apagar com confirmação, abertura sem piscar, escolhas gravadas ou cache de Modelos ilegíveis, Configurações e "apagar tudo" com a abertura falha, cache ausente listado na API, trocar a Chave abortando a atualização da lista e manter a atual deixando-a terminar, anexar por clipe, colar e soltar, Anexo recusado, `storage_full` devolvendo o rascunho | Vitest em modo browser no Chromium (`tests/ui/`), com `createToi` real sobre stores em memória |
+| E2E | enviar (com `cache_control` no corpo), parar e tentar de novo, recarregar no meio do Fluxo, duas abas, "ir para o fim" por Mensagens mais altas que a reserva, orçamento de long task da §9, Anexos depois de recarregar e tentar de novo com eles; numa aba anterior ao deploy, Configurações, preparo de Anexo, worker do Shiki e gramática que não baixam | Playwright contra `vite preview` do build (`tests/e2e/`); só `fetch` para a Anthropic é simulado, o resto é o navegador real |
 
 Regras: teste não usa `sleep`; debounce usa fake timers e instantes vêm de clock injetado. Teste de regressão fica vermelho no código anterior. Nada de teste que só confirme wiring.
 
 ## 11. Stack
 
-Tudo da tabela está instalado. `npm run check` roda typecheck, Vitest (Node e browser), build, size-limit e Playwright.
+Tudo da tabela está instalado. `npm run check` roda typecheck, Vitest (os projetos Node e browser num só processo), `vite build`, size-limit e Playwright, nessa ordem e sem repetir o typecheck do `npm run build`.
 
 | Peça | Por quê |
 |---|---|
 | UI: React + Tailwind v4 | padrão dos projetos, sem biblioteca de componentes; tokens do blog em `ui/styles.css` |
-| Fontes: Geist Mono e Lora (`@fontsource-variable`) | as do blog, servidas pela própria origem |
+| Fontes: Geist Mono e Lora (`@fontsource-variable`) | as do blog, servidas pela própria origem. Os `@font-face` são escritos em `ui/styles.css`, apontando para os `woff2` do pacote, só com `latin` (todo o pt-BR), `latin-ext` e o `symbols2` do Geist Mono (box-drawing em código); a Lora tem normal e itálico (`<em>` e citação). O CSS do pacote declararia 20 faces, com cirílico, vietnamita e os símbolos da Lora, no CSS que bloqueia o render. Medido ao implementar: o CSS caiu 1,4 KB gzip e o deploy, 13 arquivos e 245 KB |
 | Estado: hooks sobre `Toi` | o app já é a fonte da verdade; uma store de UI duplicaria o estado do Fluxo. `toi.watch*` entrega o que está gravado (também por outra aba) e `toi.subscribe` o Fluxo desta aba antes do flush; `ui/merge.ts` decide qual vale |
 | Coordenação entre abas: Web Locks | o navegador solta o lock quando a página morre; sem dependência ([ADR 0006](adr/0006-web-locks-cross-tab.md)) |
 | Persistência: Dexie | schema e índices declarados no IndexedDB |
 | Markdown: react-markdown + remark-gfm | sem HTML cru |
-| Código: Shiki lazy (`shiki/core` + engine JS) | highlight correto sem wasm e sem peso no carregamento inicial |
+| Código: Shiki num Web Worker (`shiki/core` + engine JS, linguagens curadas) | highlight correto sem wasm, sem peso no carregamento inicial e sem tokenizar na main thread |
 | Ícones: lucide-react | já usado nos projetos |
 | Testes: Vitest | núcleo em Node; `fake-indexeddb` cobre o adaptador Dexie e o `navigator.locks` do Node cobre o adaptador de locks |
 | Testes de UI: Vitest browser mode + Playwright | jsdom não mede long task, rAF nem IndexedDB real; o orçamento da §9 só vale medido em navegador |
