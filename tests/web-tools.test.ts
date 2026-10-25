@@ -23,6 +23,13 @@ const turn = (tools: FakeWebTools, overrides: Partial<ToolTurn> = {}): ToolTurn 
   ...overrides,
 });
 
+/** A Rodada do meio de um turno, com nada usado; o caso dá as URLs elegíveis, o uso e se a próxima é a última. */
+const run = (
+  state: ToolTurn,
+  calls: ToolCallPart[],
+  { eligible = [], used = 0, last = false }: { eligible?: string[]; used?: number; last?: boolean } = {},
+) => runCalls(state, calls, new Set(eligible), used, last);
+
 const searchCall = (callId: string, input: ToolCallPart['input'] = { query: 'cobre' }): ToolCallPart => ({
   type: 'tool_call',
   callId,
@@ -50,7 +57,7 @@ describe('runCalls', () => {
     const tools = new FakeWebTools();
     tools.searchAnswer = { hits: [hit('https://a.com/', 'Cobre hoje')] };
 
-    const [result] = await runCalls(turn(tools), [searchCall('t1')], new Set(), 0, false);
+    const [result] = await run(turn(tools), [searchCall('t1')]);
 
     expect(tools.searches).toEqual([{ text: 'cobre', language: 'pt' }]);
     expect(result).toMatchObject({
@@ -67,7 +74,7 @@ describe('runCalls', () => {
   ])('recusa $caso sem rede', async ({ input }) => {
     const tools = new FakeWebTools();
 
-    const [result] = await runCalls(turn(tools), [searchCall('t1', input)], new Set(), 0, false);
+    const [result] = await run(turn(tools), [searchCall('t1', input)]);
 
     expect(tools.searches).toEqual([]);
     expect(result!.error?.code).toBe('tool_invalid_input');
@@ -80,12 +87,10 @@ describe('runCalls', () => {
       failures: [],
     };
 
-    const [result] = await runCalls(
+    const [result] = await run(
       turn(tools),
       [fetchCall('t1', ['http://a.com/#segredo', 'https://inventada.com/'])],
-      new Set(['https://a.com/']),
-      0,
-      false,
+      { eligible: ['https://a.com/'] },
     );
 
     // Sai a forma comparada: o fragmento e o `http` que o Modelo pôs ficam para trás.
@@ -100,13 +105,7 @@ describe('runCalls', () => {
   it('nenhuma URL elegível vira erro sem rede', async () => {
     const tools = new FakeWebTools();
 
-    const [result] = await runCalls(
-      turn(tools),
-      [fetchCall('t1', ['https://x.com/'])],
-      new Set(),
-      0,
-      false,
-    );
+    const [result] = await run(turn(tools), [fetchCall('t1', ['https://x.com/'])]);
 
     expect(tools.fetches).toEqual([]);
     expect(result!.error?.code).toBe('tool_url_not_eligible');
@@ -121,13 +120,9 @@ describe('runCalls', () => {
       failures: [],
     };
 
-    const [result] = await runCalls(
-      turn(tools),
-      [fetchCall('t1', ['https://a.com/'])],
-      new Set(['https://a.com/']),
-      0,
-      false,
-    );
+    const [result] = await run(turn(tools), [fetchCall('t1', ['https://a.com/'])], {
+      eligible: ['https://a.com/'],
+    });
 
     expect(result!.content.length).toBeLessThanOrEqual(MAX_RESULT_CHARS);
     expect(result!.content).toContain('[truncated]');
@@ -137,7 +132,7 @@ describe('runCalls', () => {
     const tools = new FakeWebTools();
     const state = turn(tools, { calls: MAX_TOOL_CALLS_PER_TURN - 1 });
 
-    const results = await runCalls(state, [searchCall('t1'), searchCall('t2')], new Set(), 0, false);
+    const results = await run(state, [searchCall('t1'), searchCall('t2')]);
 
     expect(tools.searches).toHaveLength(1);
     expect(results.map((result) => result.error?.code ?? null)).toEqual([null, 'tool_call_limit']);
@@ -147,13 +142,9 @@ describe('runCalls', () => {
   it('só executa as chamadas cujo resultado no teto cabe no espaço que sobra', async () => {
     const tools = new FakeWebTools();
 
-    const results = await runCalls(
-      turn(tools),
-      [searchCall('t1'), searchCall('t2'), searchCall('t3')],
-      new Set(),
-      38_000,
-      false,
-    );
+    const results = await run(turn(tools), [searchCall('t1'), searchCall('t2'), searchCall('t3')], {
+      used: 38_000,
+    });
 
     expect(tools.searches).toHaveLength(2);
     expect(results.map((result) => result.error?.code ?? null)).toEqual([
@@ -166,7 +157,7 @@ describe('runCalls', () => {
   it('antes da última Rodada nenhuma chamada sai', async () => {
     const tools = new FakeWebTools();
 
-    const [result] = await runCalls(turn(tools), [searchCall('t1')], new Set(), 0, true);
+    const [result] = await run(turn(tools), [searchCall('t1')], { last: true });
 
     expect(tools.searches).toEqual([]);
     expect(result!.error?.code).toBe('tool_call_limit');
@@ -178,9 +169,9 @@ describe('runCalls', () => {
     const clock = fixedClock(0);
     const state = turn(tools, { clock });
 
-    await runCalls(state, [searchCall('t1')], new Set(), 0, false);
+    await run(state, [searchCall('t1')]);
     clock.set(10_000);
-    const [held] = await runCalls(state, [searchCall('t2')], new Set(), 0, false);
+    const [held] = await run(state, [searchCall('t2')]);
 
     expect(tools.searches).toHaveLength(1);
     expect(held!.error).toMatchObject({ code: 'tool_rate_limited', retryAfterSeconds: 20 });
@@ -190,7 +181,7 @@ describe('runCalls', () => {
     const tools = new FakeWebTools();
     tools.searchAnswer = appError('tool_quota_exhausted');
 
-    const [result] = await runCalls(turn(tools), [searchCall('t1')], new Set(), 0, false);
+    const [result] = await run(turn(tools), [searchCall('t1')]);
 
     expect(result!.error?.code).toBe('tool_quota_exhausted');
     expect(result!.content).toMatch(/^Error: /);
@@ -208,13 +199,7 @@ describe('runCalls', () => {
         });
       });
 
-    const pending = runCalls(
-      turn(tools, { signal: controller.signal }),
-      [searchCall('t1'), searchCall('t2')],
-      new Set(),
-      0,
-      false,
-    );
+    const pending = run(turn(tools, { signal: controller.signal }), [searchCall('t1'), searchCall('t2')]);
     controller.abort();
 
     await expect(pending).rejects.toMatchObject({ name: 'AbortError' });
