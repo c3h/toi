@@ -35,7 +35,7 @@ export const selection = {
 };
 
 // Criados uma vez: cada rodapé formata várias medidas, e criar um resolve o locale de novo.
-const TOKENS = new Intl.NumberFormat('pt-BR');
+const COUNT = new Intl.NumberFormat('pt-BR');
 const SECONDS = new Intl.NumberFormat('pt-BR', {
   style: 'unit',
   unit: 'second',
@@ -44,7 +44,7 @@ const SECONDS = new Intl.NumberFormat('pt-BR', {
   maximumFractionDigits: 1,
 });
 
-export const formatTokens = (count: number): string => TOKENS.format(count);
+export const formatCount = (count: number): string => COUNT.format(count);
 
 const BYTES = new Intl.NumberFormat('pt-BR', { maximumFractionDigits: 1 });
 
