@@ -25,6 +25,8 @@ export interface AnthropicPayload {
   model: string;
   max_tokens: number;
   stream: true;
+  /** Cache automático: a API põe o breakpoint no último bloco e o move conforme a Conversa cresce. */
+  cache_control: { type: 'ephemeral' };
   system?: string;
   thinking?: ThinkingOff;
   output_config: { effort: Effort };
@@ -111,6 +113,7 @@ const toContentBlock = async (part: OutgoingPart): Promise<AnthropicContentBlock
 /**
  * Lê os bytes dos Anexos aqui, para viverem só até o corpo da requisição sair.
  * Sem `thinking`, os Modelos atuais raciocinam de forma adaptativa no Esforço dado.
+ * Todo pedido liga o cache de prompt, no TTL padrão de 5 min (ADR 0012).
  */
 export const toAnthropicPayload = async (
   request: ChatRequest,
@@ -119,6 +122,7 @@ export const toAnthropicPayload = async (
   model: request.model,
   max_tokens: request.maxTokens,
   stream: true,
+  cache_control: { type: 'ephemeral' },
   ...(request.system === undefined ? {} : { system: request.system }),
   ...(thinking === null ? {} : { thinking }),
   output_config: { effort: request.effort },

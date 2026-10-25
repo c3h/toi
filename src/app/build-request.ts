@@ -95,20 +95,28 @@ const outgoingResult = ({ callId, content, error }: ToolResultPart) => ({
 });
 
 /**
+ * O texto como volta ao Provedor, aparado igual no histórico e em
+ * `continuationOf`: a Rodada enviada no turno volta byte a byte no seguinte,
+ * e o cache de prompt não quebra ali. Texto vazio a API recusa.
+ */
+const outgoingText = (text: string): Array<{ type: 'text'; text: string }> => {
+  const trimmed = text.trim();
+  return trimmed ? [{ type: 'text', text: trimmed }] : [];
+};
+
+/**
  * Partes que voltam ao Provedor. Raciocínio de turnos anteriores não volta
  * (só o da resposta em curso, em `continuationOf`); Partes de Ferramenta só
  * voltam ao Provedor que as gerou e quando o envio oferece Ferramentas; fora
- * disso a resposta volta só como texto. Texto vazio a API recusa.
+ * disso a resposta volta só como texto.
  */
 const outgoingParts = (message: Message, withTools: boolean): SelectedPart[] =>
   (withTools ? completeRounds(message.parts) : message.parts).flatMap((part): SelectedPart[] => {
     switch (part.type) {
       case 'file':
         return [part];
-      case 'text': {
-        const text = part.text.trim();
-        return text ? [{ type: 'text', text }] : [];
-      }
+      case 'text':
+        return outgoingText(part.text);
       case 'tool_call':
         return withTools ? [part] : [];
       case 'tool_result':
@@ -302,14 +310,6 @@ const elideOlder = (
   };
 };
 
-const outputTokensOf = (model: Model): number => {
-  const configuredMax = model.maxTokens ?? DEFAULT_MAX_OUTPUT_TOKENS;
-  return Math.min(
-    DEFAULT_MAX_OUTPUT_TOKENS,
-    Number.isFinite(configuredMax) && configuredMax > 0 ? configuredMax : DEFAULT_MAX_OUTPUT_TOKENS,
-  );
-};
-
 /**
  * Escolhe o que vai ao Provedor: normaliza papéis, tira Anexos e resultados
  * antigos que passam dos tetos da API e, se os tokens ainda passam do
@@ -348,7 +348,7 @@ export const selectHistory = ({
     throw new Error('selectHistory precisa terminar com uma Mensagem do user.');
   }
 
-  const maxTokens = outputTokensOf(model);
+  const maxTokens = Math.min(DEFAULT_MAX_OUTPUT_TOKENS, model.maxTokens ?? DEFAULT_MAX_OUTPUT_TOKENS);
   const maxInputTokens = model.maxInputTokens ?? DEFAULT_MAX_INPUT_TOKENS;
   // As Rodadas do turno crescem a requisição depois do corte: o espaço delas sai do orçamento,
   // sem passar da metade, para o histórico nunca ficar sem lugar.
@@ -442,7 +442,7 @@ export const continuationOf = (parts: Part[]): ChatMessage[] =>
         case 'tool_result':
           return [outgoingResult(part)];
         case 'text':
-          return part.text.trim() === '' ? [] : [{ type: 'text', text: part.text }];
+          return outgoingText(part.text);
         case 'file':
           return [];
         default:

@@ -14,6 +14,7 @@ import {
   abortError,
   baseDeps,
   deferred,
+  expectCachedPrefix,
   gatedProvider,
   imageFile,
   MemoryStore,
@@ -328,5 +329,21 @@ describe('sendMessage com Anexos', () => {
     expect(retried.message.status).toBe('failed');
     expect(retried.message.error?.code).toBe('storage_failed');
     expect(provider.requests).toHaveLength(1);
+  });
+});
+
+describe('cache de prompt', () => {
+  it.each([
+    { caso: 'só texto', attachments: [] },
+    { caso: 'com Anexos', attachments: [imageFile('i1', 3), textFile('t1', '# notas')] },
+  ])('o envio seguinte começa pelo pedido anterior inteiro ($caso)', async ({ attachments }) => {
+    const { deps } = await baseDeps();
+    const provider = new ScriptedProvider(successEvents());
+    const run = { ...deps, provider };
+
+    await sendMessage(run, ask({ attachments }));
+    await sendMessage(run, ask({ text: 'E depois?' }));
+
+    await expectCachedPrefix(provider.requests[0]!, provider.requests[1]!);
   });
 });

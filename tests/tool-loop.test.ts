@@ -7,6 +7,7 @@ import { WEB_FETCH, WEB_SEARCH } from '../src/domain/web';
 import {
   abortError,
   baseDeps,
+  expectCachedPrefix,
   FakeWebTools,
   hit,
   MemorySettingsStore,
@@ -31,6 +32,13 @@ const searching = (callId = 't1', query = 'cobre'): StreamEvent[] =>
   );
 
 const answering = (text = 'O cobre subiu.'): StreamEvent[] => round(textEvents(text), 'end_turn', 7);
+
+/** Uma Rodada sem raciocínio que escreve antes de buscar, com o espaço que o Modelo deixa no fim. */
+const narrating = (callId = 't1', query = 'cobre'): StreamEvent[] =>
+  round(
+    [...textEvents('Vou buscar.\n\n'), ...toolCall(1, callId, WEB_SEARCH, JSON.stringify({ query }))],
+    'tool_use',
+  );
 
 const send = async (deps: RunDeps, overrides: Partial<SendOptions> = {}) =>
   (await startSendMessage(deps, { ...sendInput(), signal: new AbortController().signal, ...overrides }))
@@ -224,6 +232,45 @@ describe('laço de Rodadas', () => {
 
     expect(message.status).toBe('failed');
     expect(tools.searches).toEqual([]);
+  });
+
+  it('cada Rodada reenvia a anterior inteira e só cresce no fim', async () => {
+    const { provider, run } = await setup([searching('t1'), narrating('t2', 'ouro'), answering()]);
+
+    await send(run);
+
+    expect(provider.requests).toHaveLength(3);
+    await expectCachedPrefix(provider.requests[0]!, provider.requests[1]!);
+    await expectCachedPrefix(provider.requests[1]!, provider.requests[2]!);
+  });
+
+  it('sem raciocínio, o turno seguinte começa pela última Rodada inteira', async () => {
+    const { provider, run } = await setup([narrating(), answering(), answering('O ouro caiu.')]);
+
+    await send(run);
+    await send(run, { text: 'E o ouro?' });
+
+    await expectCachedPrefix(provider.requests[1]!, provider.requests[2]!);
+  });
+
+  it('com raciocínio, o turno seguinte o deixa de fora e diverge no primeiro bloco da resposta', async () => {
+    // Perda aceita no ADR 0012: o raciocínio de turnos anteriores não volta, e o cache só
+    // acerta até a pergunta do turno anterior.
+    const { provider, run } = await setup([searching(), answering(), answering('O ouro caiu.')]);
+
+    await send(run);
+    await send(run, { text: 'E o ouro?' });
+
+    const [, lastRound, nextTurn] = provider.requests;
+    const [question, sent, results] = lastRound!.messages;
+    expect(sent!.parts[0]).toMatchObject({ type: 'reasoning' });
+    expect(nextTurn!.messages.slice(0, 3)).toEqual([
+      question,
+      { role: 'assistant', parts: sent!.parts.slice(1) },
+      results,
+    ]);
+    const parts = nextTurn!.messages.flatMap((message) => message.parts);
+    expect(parts.some((part) => part.type === 'reasoning')).toBe(false);
   });
 
   it('parar durante a Ferramenta interrompe e guarda o que já veio', async () => {

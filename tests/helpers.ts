@@ -1,3 +1,4 @@
+import { expect } from 'vitest';
 import type { Attachment, AttachmentUpload } from '../src/domain/attachment';
 import type { Conversation } from '../src/domain/conversation';
 import { appError, missingAttachmentError } from '../src/domain/error';
@@ -9,6 +10,7 @@ import { emptyUsage, type StopReason } from '../src/domain/usage';
 import type { ChatProvider, ChatRequest, ProviderAdapter } from '../src/ports/chat-provider';
 import type { FlowDeps } from '../src/app/flow';
 import type { RunDeps, SendOptions } from '../src/app/send-message';
+import { toAnthropicPayload } from '../src/adapters/protocols/anthropic-messages/request';
 import { anthropicInfo } from '../src/adapters/providers/anthropic/info';
 import { anthropicFamily } from '../src/adapters/providers/anthropic/models';
 import type { Clock } from '../src/ports/clock';
@@ -406,6 +408,18 @@ export class ScriptedProvider implements ChatProvider {
     }
   }
 }
+
+/**
+ * O cache de prompt só acerta se o corpo do pedido anterior volta intacto no
+ * seguinte: os mesmos campos e as mesmas Mensagens no começo, crescendo só no fim.
+ */
+export const expectCachedPrefix = async (before: ChatRequest, after: ChatRequest): Promise<void> => {
+  const { messages: earlier, ...head } = await toAnthropicPayload(before, null);
+  const { messages: later, ...next } = await toAnthropicPayload(after, null);
+  expect(next).toEqual(head);
+  expect(later.slice(0, earlier.length)).toEqual(earlier);
+  expect(later.length).toBeGreaterThan(earlier.length);
+};
 
 /** Recusa a Chave ao listar Modelos. */
 export class FailingProvider extends ScriptedProvider {

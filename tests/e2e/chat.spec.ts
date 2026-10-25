@@ -6,6 +6,15 @@ test('envia e vê a resposta em Markdown', async ({ page }) => {
   await setMock(page, { reply: 'Resposta com **ênfase** e `código`.', deltas: 8, delayMs: 20 });
 
   await send(page, 'Primeira pergunta');
+  // O pedido da Mensagem entre os que saíram: o do Título, quando há, leva outro texto.
+  await expect
+    .poll(() => page.evaluate(() => window.__bodies.map((body): unknown => JSON.parse(body))))
+    .toContainEqual(
+      expect.objectContaining({
+        cache_control: { type: 'ephemeral' },
+        messages: [{ role: 'user', content: [{ type: 'text', text: 'Primeira pergunta' }] }],
+      }),
+    );
 
   await expect(page.locator('strong', { hasText: 'ênfase' })).toBeVisible();
   await expect(page.getByTitle('12 tokens de entrada, 8 de saída')).toBeVisible();

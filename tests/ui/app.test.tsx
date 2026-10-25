@@ -24,7 +24,10 @@ import {
   replyEvents,
   ScriptedProvider,
   round,
+  testModel,
+  textEvents,
   toolCall,
+  usage,
 } from '../helpers';
 
 interface MountOptions {
@@ -95,6 +98,27 @@ describe('App', () => {
     await expect
       .element(screen.getByRole('button', { name: 'primeira pergunta', exact: true }))
       .toHaveAttribute('aria-current', 'page');
+  });
+
+  it('o rodapé diz quanto da entrada veio do cache', async () => {
+    const cached = { cacheCreationInputTokens: 20, cacheReadInputTokens: 1200 };
+    const screen = await mount(
+      () =>
+        new ScriptedProvider([
+          { type: 'started', model: testModel.id, usage: { ...usage(10, 0), ...cached } },
+          ...textEvents('Olá'),
+          { type: 'usage', usage: { ...usage(10, 5), ...cached }, stopReason: 'end_turn' },
+          { type: 'finished' },
+        ]),
+    );
+    await connect(screen);
+
+    await userEvent.fill(screen.getByLabelText('mensagem'), 'Pergunta');
+    await userEvent.keyboard('{Enter}');
+
+    await expect
+      .element(screen.getByTitle('1.230 tokens de entrada (1.200 do cache), 5 de saída'))
+      .toHaveTextContent('1.230 → 5');
   });
 
   it('mostra a Busca na resposta e abre as Fontes', async () => {

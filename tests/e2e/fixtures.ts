@@ -11,9 +11,8 @@ export interface MockOptions {
 declare global {
   interface Window {
     __mock: MockOptions;
-    __requests: number;
-    /** Corpo do último POST de `messages`, para conferir o que saiu da página. */
-    __lastBody: string;
+    /** Corpo de cada POST de `messages`, na ordem, para conferir o que saiu da página. */
+    __bodies: string[];
   }
 }
 
@@ -28,8 +27,7 @@ const installMock = () => {
     encoder.encode(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
 
   window.__mock = { reply: 'Olá.', deltas: 1, delayMs: 0 };
-  window.__requests = 0;
-  window.__lastBody = '';
+  window.__bodies = [];
 
   window.fetch = async (input, init) => {
     const url = String(input instanceof Request ? input.url : input);
@@ -64,8 +62,7 @@ const installMock = () => {
       );
     }
 
-    window.__requests += 1;
-    window.__lastBody = typeof init?.body === 'string' ? init.body : '';
+    window.__bodies.push(typeof init?.body === 'string' ? init.body : '');
     const { reply, deltas, delayMs } = window.__mock;
     const size = Math.ceil(reply.length / deltas);
     const signal = init?.signal;

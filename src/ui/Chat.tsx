@@ -141,10 +141,15 @@ const statsOf = (message: Message): Stat[] => {
     usage.inputTokens + usage.cacheCreationInputTokens + usage.cacheReadInputTokens,
   );
   const output = formatTokens(usage.outputTokens);
+  // O que o cache de prompt devolveu já está na entrada; a parte só aparece por extenso.
+  const cached =
+    usage.cacheReadInputTokens > 0
+      ? ` (${formatTokens(usage.cacheReadInputTokens)} do cache)`
+      : '';
   stats.push({
     icon: Hash,
     short: `${input} → ${output}`,
-    label: `${input} tokens de entrada, ${output} de saída`,
+    label: `${input} tokens de entrada${cached}, ${output} de saída`,
   });
   return stats;
 };
