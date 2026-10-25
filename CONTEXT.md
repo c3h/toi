@@ -85,3 +85,7 @@ _Avoid_: Backup (backup é o uso que a pessoa faz do arquivo), dump
 **Título**:
 O nome curto de uma Conversa. Nasce derivado da primeira Mensagem do user (do texto ou, sem texto, do nome do primeiro Anexo); quando a primeira resposta termina, o Modelo do Título o substitui, a menos que a pessoa já tenha renomeado.
 _Avoid_: Nome, assunto
+
+**Instruções**:
+O texto livre que a pessoa salva para orientar as respostas em todas as Conversas: quem ela é e como prefere as respostas. Cada resposta usa as que estavam salvas quando ela começou ([ADR 0013](docs/adr/0013-instructions.md)).
+_Avoid_: System prompt (em texto corrido), custom instructions, persona, memória, perfil
