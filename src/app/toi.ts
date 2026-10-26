@@ -1,6 +1,7 @@
 import type { Conversation } from '../domain/conversation';
 import { appError } from '../domain/error';
 import type { AttachmentId, ConversationId, ProviderId } from '../domain/ids';
+import { MAX_INSTRUCTIONS_CHARS, normalizeInstructions } from '../domain/instructions';
 import type { Message } from '../domain/message';
 import {
   pickedModels,
@@ -89,6 +90,14 @@ export interface Toi {
   titleFamilies(): FamilyRef[];
   /** Vale a partir da próxima Conversa nomeada, também em outra aba. */
   saveTitleModel(model: ModelRef): Promise<void>;
+  /** As gravadas; `null` até a pessoa escrever. */
+  instructions(): Promise<string | null>;
+  /**
+   * Grava normalizadas (`normalizeInstructions`): vazias apagam. Vale a partir
+   * do próximo envio, também em outra aba; a resposta em curso segue com as
+   * que leu. Recusa texto acima de `MAX_INSTRUCTIONS_CHARS`.
+   */
+  saveInstructions(text: string): Promise<void>;
   /** Troca o Modelo da Conversa e passa a ser o default das próximas. */
   changeModel(id: ConversationId, model: ModelRef): Promise<Conversation | null>;
   /** Troca o Esforço da Conversa e passa a ser o default das próximas. */
@@ -281,6 +290,16 @@ export const createToi = async (deps: ToiDeps): Promise<Toi> => {
     titleFamilies: () => titleFamilies,
 
     saveTitleModel: (model) => deps.settings.saveTitleModel(model),
+
+    instructions: () => deps.settings.instructions(),
+
+    async saveInstructions(text) {
+      const instructions = normalizeInstructions(text);
+      if (instructions !== null && instructions.length > MAX_INSTRUCTIONS_CHARS) {
+        throw new Error(`saveInstructions recebeu mais de ${MAX_INSTRUCTIONS_CHARS} caracteres.`);
+      }
+      await deps.settings.saveInstructions(instructions);
+    },
 
     async changeModel(id, model) {
       const [updated] = await Promise.all([

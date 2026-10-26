@@ -38,7 +38,7 @@ import { EffortPicker, effortLabel } from './EffortPicker';
 import { ModelPicker } from './ModelPicker';
 import { preloadMarkdown, Prose } from './Prose';
 import { segmentsOf } from './segments';
-import { formatSeconds, formatTokens, lower } from './support';
+import { formatSeconds, formatCount, lower } from './support';
 import { ToolRow } from './ToolRow';
 import { useMessages } from './use-messages';
 import { useReveal } from './use-reveal';
@@ -132,19 +132,19 @@ const statsOf = (message: Message): Stat[] => {
     stats.push({ icon: Timer, short: wait, label: `${wait} até o modelo responder` });
 
     if (timing.tokensPerSecond !== null) {
-      const rate = formatTokens(Math.round(timing.tokensPerSecond));
+      const rate = formatCount(Math.round(timing.tokensPerSecond));
       stats.push({ icon: Zap, short: `${rate} tok/s`, label: `${rate} tokens por segundo` });
     }
   }
 
-  const input = formatTokens(
+  const input = formatCount(
     usage.inputTokens + usage.cacheCreationInputTokens + usage.cacheReadInputTokens,
   );
-  const output = formatTokens(usage.outputTokens);
+  const output = formatCount(usage.outputTokens);
   // O que o cache de prompt devolveu já está na entrada; a parte só aparece por extenso.
   const cached =
     usage.cacheReadInputTokens > 0
-      ? ` (${formatTokens(usage.cacheReadInputTokens)} do cache)`
+      ? ` (${formatCount(usage.cacheReadInputTokens)} do cache)`
       : '';
   stats.push({
     icon: Hash,

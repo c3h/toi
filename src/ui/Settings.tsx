@@ -11,8 +11,9 @@ import {
   type ModelPicks,
   type ModelRef,
 } from '../domain/model';
+import { MAX_INSTRUCTIONS_CHARS, normalizeInstructions } from '../domain/instructions';
 import { DEFAULT_TOOL_SPACE, TOOL_SPACES, type ToolSpace } from '../domain/web';
-import { download, errorInfo, linkClass, lower, requestPersistence } from './support';
+import { download, errorInfo, formatCount, linkClass, lower, requestPersistence } from './support';
 import { readTheme, saveTheme, type ThemePref } from './theme';
 
 export type SettingsSection = 'top' | 'modelos' | 'busca';
@@ -419,8 +420,9 @@ const SearchKey = ({ toi, service }: { toi: Toi; service: ServiceInfo }) => {
         resposta, quando achar útil. sem chave, ele responde só com o que já sabe.
       </p>
       <p>
-        o que sai daqui: o texto das buscas, que o modelo escreve e pode trazer trechos da conversa, e
-        os endereços das páginas que ele lê, só entre os que já apareceram na conversa. vai só{' '}
+        o que sai daqui: o texto das buscas, que o modelo escreve e pode trazer trechos da conversa
+        e das instruções, e os endereços das páginas que ele lê, só entre os que já apareceram na
+        conversa. vai só{' '}
         {service.to.toLowerCase()}, cujos{' '}
         <a href={service.termsUrl} target="_blank" rel="noopener noreferrer" className={linkClass}>
           termos
@@ -512,6 +514,147 @@ const SearchKey = ({ toi, service }: { toi: Toi; service: ServiceInfo }) => {
               </>
             )}
           </p>
+        </form>
+      )}
+
+      {error && (
+        <p role="alert" className="text-danger">
+          {lower(error.message)}
+        </p>
+      )}
+    </>
+  );
+};
+
+/**
+ * As Instruções que vão em toda resposta. Salvar é explícito, e o campo só
+ * abre depois de ler o texto gravado: um campo vazio por falha de leitura
+ * levaria a pessoa a sobrescrever o que não viu.
+ */
+const InstructionsField = ({
+  toi,
+  provider,
+  service,
+}: {
+  toi: Toi;
+  provider: ProviderInfo;
+  service: ServiceInfo;
+}) => {
+  // `undefined` enquanto o texto gravado não chegou; `null` é a pessoa sem Instruções.
+  const [saved, setSaved] = useState<string | null | undefined>(undefined);
+  const [draft, setDraft] = useState('');
+  const [saving, setSaving] = useState(false);
+  const [done, setDone] = useState(false);
+  const [readError, setReadError] = useState<AppErrorInfo | null>(null);
+  const [error, setError] = useState<AppErrorInfo | null>(null);
+
+  useEffect(() => {
+    let live = true;
+    toi.instructions().then(
+      (text) => {
+        if (!live) return;
+        setSaved(text);
+        setDraft(text ?? '');
+      },
+      (cause) => {
+        if (live) setReadError(errorInfo(cause));
+      },
+    );
+    return () => {
+      live = false;
+    };
+  }, [toi]);
+
+  const next = normalizeInstructions(draft);
+  const length = next?.length ?? 0;
+  const over = length > MAX_INSTRUCTIONS_CHARS;
+  const dirty = saved !== undefined && next !== saved;
+  const canSave = dirty && !over && !saving;
+
+  const save = async () => {
+    if (!canSave) return;
+    setSaving(true);
+    setError(null);
+    try {
+      await toi.saveInstructions(draft);
+      setSaved(next);
+      setDraft(next ?? '');
+      setDone(true);
+    } catch (cause) {
+      setError(errorInfo(cause));
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <>
+      <p>
+        o que o modelo deve saber sobre você e como prefere as respostas. vai{' '}
+        {provider.to.toLowerCase()} em toda resposta, de todas as conversas, a partir do próximo
+        envio.
+      </p>
+      <p>
+        com a busca na web ligada, o modelo pode usar o que estiver aqui no texto das buscas, que
+        vai {service.to.toLowerCase()}. não escreva aqui senhas nem chaves.
+      </p>
+
+      {readError ? (
+        <p role="alert" className="text-danger">
+          não deu para ler as instruções salvas: {lower(readError.message)}
+        </p>
+      ) : (
+        <form
+          onSubmit={(event) => {
+            event.preventDefault();
+            void save();
+          }}
+        >
+          <label htmlFor="instructions" className="sr-only">
+            instruções
+          </label>
+          <textarea
+            id="instructions"
+            rows={6}
+            value={draft}
+            disabled={saved === undefined}
+            readOnly={saving}
+            onChange={(event) => {
+              setDraft(event.target.value);
+              setDone(false);
+            }}
+            onKeyDown={(event) => {
+              // Com texto não salvo, esc sai do campo em vez de fechar Configurações.
+              if (event.key === 'Escape' && dirty) {
+                event.stopPropagation();
+                event.currentTarget.blur();
+              }
+            }}
+            placeholder="ex.: trabalho com dados em são paulo. prefiro respostas diretas, com exemplos em python."
+            aria-invalid={over}
+            aria-describedby="instructions-count"
+            className="block w-full resize-y border border-line bg-panel px-3 py-2 text-base text-text outline-none transition-colors placeholder:text-subtle focus:border-accent aria-invalid:border-danger disabled:opacity-60"
+          />
+          <div className="mt-3 flex flex-wrap items-baseline justify-between gap-x-4 gap-y-2">
+            <p id="instructions-count" className={`text-sm ${over ? 'text-danger' : 'text-subtle'}`}>
+              {formatCount(length)} de {formatCount(MAX_INSTRUCTIONS_CHARS)} caracteres
+            </p>
+            <div className="flex items-baseline gap-4">
+              {done && !dirty && (
+                <span role="status" className="text-sm text-accent">
+                  salvo.
+                </span>
+              )}
+              {dirty && !saving && <span className="text-sm text-subtle">não salvo</span>}
+              <button
+                type="submit"
+                disabled={!canSave}
+                className="flex-none border border-accent px-3 py-2 text-accent transition-colors hover:bg-accent hover:text-bg disabled:border-line disabled:text-subtle disabled:hover:bg-transparent"
+              >
+                {saving ? 'salvando…' : 'salvar'}
+              </button>
+            </div>
+          </div>
         </form>
       )}
 
@@ -699,6 +842,10 @@ export default function Settings({
           </Action>
         </Section>
 
+        <Section title="instruções">
+          <InstructionsField toi={toi} provider={provider} service={service} />
+        </Section>
+
         <Section title="título das conversas">
           <TitleModelChoice toi={toi} provider={provider} picked={picked} />
         </Section>
@@ -748,7 +895,7 @@ export default function Settings({
           </div>
           {confirmRow(
             'erase_conversations',
-            `apagar ${conversationCount === 1 ? 'a conversa' : `as ${conversationCount} conversas`}? a chave fica.`,
+            `apagar ${conversationCount === 1 ? 'a conversa' : `as ${conversationCount} conversas`}? a chave e as configurações ficam.`,
             () => void run(() => toi.eraseConversations(), 'conversas apagadas.'),
           )}
           {confirmRow(

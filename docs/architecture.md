@@ -19,6 +19,7 @@ Um chat que responde uma pergunta com um Modelo da Anthropic, com Fluxo, cancela
 - exportar o histórico em JSON versionado, sem a Chave;
 - Markdown e código na resposta;
 - tokens de entrada e saída, tempo até o Modelo responder e tokens por segundo por Mensagem;
+- Instruções escritas uma vez em Configurações e enviadas em toda resposta ([ADR 0013](adr/0013-instructions.md));
 - com a Chave da TinyFish, Busca e Leitura na web durante a resposta, com as Fontes na Mensagem ([ADR 0010](adr/0010-web-tools-via-tinyfish.md)).
 
 **Fora da v1:** conta, sincronização, compartilhamento, i18n, outras Ferramentas, branching e os itens do roadmap (§12).
@@ -58,7 +59,7 @@ src/
 
 **Regra de dependência:** `ui → app → ports ← adapters`; todos podem importar `domain`; `domain` não importa ninguém. `app` não importa `adapters` e recebe as implementações por injeção. `main.tsx` é o composition root e injeta as implementações concretas; cada Provedor entra em `Toi` como um `ProviderAdapter` (`info` + `create(key)`) na lista `providers`, e o Serviço como um `ServiceAdapter` em `service`, um só: um segundo Serviço pede decisão (`AGENTS.md`). Provedor e Protocolo são papéis separados dentro de `adapters` ([ADR 0008](adr/0008-provider-and-protocol.md)).
 
-As portas existem por fronteiras reais: `ChatProvider` isola o HTTP de terceiro e permite um segundo Provedor, e `ProviderInfo` é tudo que a UI sabe dele; `WebTools` isola o Serviço das Ferramentas, e `ServiceInfo` é tudo que a UI sabe dele; o storage permite trocar IndexedDB ou usar memória em teste; `Locks` coordena abas por Web Locks; `TokenEstimator` permite substituir a heurística pela contagem exata sem tocar no domínio; `SettingsStore` guarda o cache de Modelos, o último Modelo e o último Esforço, quais Modelos o seletor oferece, o espaço das Rodadas e o Modelo do Título.
+As portas existem por fronteiras reais: `ChatProvider` isola o HTTP de terceiro e permite um segundo Provedor, e `ProviderInfo` é tudo que a UI sabe dele; `WebTools` isola o Serviço das Ferramentas, e `ServiceInfo` é tudo que a UI sabe dele; o storage permite trocar IndexedDB ou usar memória em teste; `Locks` coordena abas por Web Locks; `TokenEstimator` permite substituir a heurística pela contagem exata sem tocar no domínio; `SettingsStore` guarda o cache de Modelos, o último Modelo e o último Esforço, quais Modelos o seletor oferece, o espaço das Rodadas, o Modelo do Título e as Instruções.
 
 ## 4. Ciclo de uma Mensagem
 
@@ -66,7 +67,7 @@ As portas existem por fronteiras reais: `ChatProvider` isola o HTTP de terceiro 
 
 1. segura os locks da Conversa (§4, Coordenação entre abas) até o passo 8; sem eles, `flow_busy`;
 2. grava numa transação (`startTurn`) a Mensagem do user (`complete`), a do assistant (`streaming`) e os bytes dos Anexos;
-3. normaliza e seleciona o histórico, busca no store só os Anexos que ficaram e monta o `ChatRequest` com os Blobs, que o adapter lê ao montar o corpo (`build-request`); parar durante a busca fecha em `interrupted` sem chamar o Provedor;
+3. lê as Instruções, normaliza e seleciona o histórico, busca no store só os Anexos que ficaram e monta o `ChatRequest` com os Blobs, que o adapter lê ao montar o corpo (`build-request`); parar durante a leitura fecha em `interrupted` sem chamar o Provedor, e falhar ao ler as Instruções fecha em `failed`, também sem chamar;
 4. consome `provider.stream(request, signal)`;
 5. para cada Evento aplicado, atualiza a Parte e agenda o flush (300 ms);
 6. se a Rodada terminou em `tool_use`, executa as chamadas e volta ao passo 4 com as Rodadas fechadas (abaixo);
@@ -83,7 +84,7 @@ streaming ── Rodada fecha, stop ≠ tool_use ──────────�
 
 ### Rodadas e Ferramentas
 
-Decisão em [ADR 0010](adr/0010-web-tools-via-tinyfish.md). Com o Serviço conectado no início do envio, o `ChatRequest` leva as definições de Busca e Leitura, com a data e o idioma do início do turno. O prefixo (histórico selecionado, Anexos e Ferramentas) é montado uma vez; cada Rodada envia o prefixo mais as Rodadas já fechadas da resposta, com o raciocínio (`continuationOf`).
+Decisão em [ADR 0010](adr/0010-web-tools-via-tinyfish.md). Com o Serviço conectado no início do envio, o `ChatRequest` leva as definições de Busca e Leitura, com a data e o idioma do início do turno. O prefixo (Instruções, histórico selecionado, Anexos e Ferramentas) é montado uma vez; cada Rodada envia o prefixo mais as Rodadas já fechadas da resposta, com o raciocínio (`continuationOf`).
 
 - `domain/round.ts` (`applyEvent`) aplica os Eventos à Mensagem, aceitando os blocos em qualquer ordem: o texto aparece a cada delta, o raciocínio só depois de terminado e assinado, e a chamada só com o JSON do input fechado num objeto. Um delta só vale no bloco que um `part_started` abriu.
 - As chamadas de uma Rodada correm em paralelo, com o `signal`. O laço espera todas, mesmo depois de um abort, antes de seguir ou soltar o lock. Falha do Serviço vira `tool_result` com erro tipado e a resposta segue; o Modelo lê uma dica em inglês, nunca a mensagem crua.
@@ -146,7 +147,7 @@ Regras do adaptador:
 | `Part` `file` de imagem | bloco `image`, `source` base64 em PNG ou JPEG |
 | `Part` `file` de PDF | bloco `document`, `source` base64 `application/pdf`, nome em `title` |
 | `Part` `file` de texto | bloco `document`, `source` `text`, nome em `title` |
-| `ChatRequest.system` | `system`, só quando definido |
+| `ChatRequest.system` | `system`, só quando não é `null` |
 | `ChatRequest.effort` | `output_config.effort`, sempre |
 | `ChatRequest.reasoning` `off` | `thinking` que o Modelo aceita para desligar (`providers/anthropic/thinking.ts`, passado ao Protocolo); sem regra, nenhum |
 | todo `ChatRequest` | `cache_control: { type: 'ephemeral' }` no topo, sempre: cache automático no TTL padrão, constante do Protocolo |
@@ -154,7 +155,7 @@ Regras do adaptador:
 | `usage` | `message_start.usage` + `message_delta.usage` |
 | `stopReason` | `message_delta.delta.stop_reason` |
 
-A porta carrega Partes, não texto ([ADR 0003](adr/0003-message-as-parts-and-normalized-events.md)): os Anexos, o raciocínio e as Ferramentas entraram como Partes novas. Os Anexos vão na Mensagem do user antes do texto. `system` só é preenchido no pedido do Título; system prompt é sempre campo próprio, nunca Mensagem. A porta não tem parâmetros de amostragem. O Esforço vai em todo envio e regula quanto o Modelo raciocina; `reasoning: 'off'`, só no pedido do Título, desliga o raciocínio onde o Modelo aceita; o raciocínio é gravado, mas não aparece (§1). As Ferramentas vão sem `eager_input_streaming`: os inputs são curtos, e sem ele a API valida cada parâmetro antes de emiti-lo. Todo pedido liga o cache de prompt; o que mantém o prefixo estável e as perdas aceitas estão no [ADR 0012](adr/0012-prompt-caching.md).
+A porta carrega Partes, não texto ([ADR 0003](adr/0003-message-as-parts-and-normalized-events.md)): os Anexos, o raciocínio e as Ferramentas entraram como Partes novas. Os Anexos vão na Mensagem do user antes do texto. `system` leva as Instruções no pedido de resposta, quando há, e a instrução própria no do Título, que não recebe as Instruções; é sempre campo próprio, nunca Mensagem. A porta não tem parâmetros de amostragem. O Esforço vai em todo envio e regula quanto o Modelo raciocina; `reasoning: 'off'`, só no pedido do Título, desliga o raciocínio onde o Modelo aceita; o raciocínio é gravado, mas não aparece (§1). As Ferramentas vão sem `eager_input_streaming`: os inputs são curtos, e sem ele a API valida cada parâmetro antes de emiti-lo. Todo pedido liga o cache de prompt; o que mantém o prefixo estável e as perdas aceitas estão no [ADR 0012](adr/0012-prompt-caching.md).
 
 A Anthropic usa o Protocolo `anthropic-messages`; `anthropic-version` é do Protocolo, `x-api-key` e o header de acesso pelo navegador são do Provedor.
 
@@ -214,7 +215,7 @@ IndexedDB via Dexie. O schema está em `src/adapters/storage/db.ts`: `conversati
 | `conversations` | id, título e a origem dele, Provedor, Modelo e Esforço, timestamps | Mensagens |
 | `messages` | id, conversationId, seq, papel, partes (de Anexo, só os metadados; de Ferramenta, o input, o texto entregue ao Modelo, as Fontes e as falhas), estado, timestamps (incluindo o primeiro token), Provedor, Modelo e Esforço, uso, stopReason, erro | Chave |
 | `attachments` | id, conversationId e os bytes preparados (`Blob`) | Chave |
-| `settings` | último Modelo e último Esforço, cache de Modelos por Provedor, Modelos do seletor, espaço das Rodadas, Modelo do Título | Chave |
+| `settings` | último Modelo e último Esforço, cache de Modelos por Provedor, Modelos do seletor, espaço das Rodadas, Modelo do Título, Instruções | Chave |
 | `credentials` | Provedor ou Serviço → Chave | Qualquer dado de Conversa |
 
 **Formato gravado:** o adaptador converte o domínio para registros escritos à mão (`adapters/storage/records.ts`) e de volta; como mudar a forma gravada está no [ADR 0007](adr/0007-explicit-persisted-formats.md).
@@ -229,11 +230,13 @@ IndexedDB via Dexie. O schema está em `src/adapters/storage/db.ts`: `conversati
 
 **Modelo e Esforço:** `conversation.provider` + `conversation.model` + `conversation.effort` são a fonte da verdade. Os seletores mudam a Conversa atual (`toi.changeModel`/`toi.changeEffort`, sem mexer em `updatedAt`); a resposta grava o Esforço pedido, como grava o Modelo. `settings.lastModel`, também com Provedor, e `settings.lastEffort` só definem o default de uma Conversa nova: são gravados a cada envio e a cada troca numa Conversa; no rascunho, a troca vale até o primeiro envio gravá-la. Falhar ao gravá-los não impede o envio. Sem `lastEffort`, a Conversa nova começa no menor Esforço. Ausência não é falha: quando a abertura não consegue lê-los ou ler o cache de Modelos, a tela fica no bloqueio da §9 em vez de seguir com o padrão.
 
+**Instruções:** `settings.instructions`, gravadas já normalizadas; vazias apagam a linha. Valem para todas as Conversas e não ficam na Mensagem nem na Exportação ([ADR 0013](adr/0013-instructions.md)).
+
 **Tema:** preferência visual desta máquina em `localStorage` (`toi:theme`), lida por `public/theme.js` antes do primeiro paint — IndexedDB é assíncrono e o tema piscaria. Não é dado de Conversa; "apagar tudo" também o limpa.
 
 **Duas abas:** a seleção é independente; a barra lateral e a Conversa aberta observam o store (`watchConversations`/`watchMessages`, `liveQuery` no Dexie), então o que outra aba grava aparece sem recarregar — no ritmo do flush, a cada 300 ms; Mensagens de uma Conversa são escritas por uma aba por vez (§4). Metadados da Conversa, como Título e Modelo, seguem last write wins, e cada mudança é lida e gravada numa só transação (`updateConversation`): o fim de um Fluxo só toca `updatedAt` e não desfaz a troca de Modelo ou o Título que outra aba ou a pessoa mudou enquanto a resposta chegava. Sem merge de texto entre abas.
 
-**Exportação:** `toi.exportHistory()` devolve um retrato do histórico no formato `toi.history` versão 1 (`app/export.ts`); a UI só transforma em arquivo. Lê apenas a porta de Conversas, então a Chave não tem caminho até o arquivo. Mensagem em Fluxo sai como `interrupted`. O Esforço da Conversa e da Mensagem entrou como campo novo, compatível, sem subir `version`; as Partes `file` (com os bytes em base64), `redacted_reasoning`, `tool_call` e `tool_result` também. O arquivo é um `Blob` montado por Mensagem, para o histórico não virar uma string só ([ADR 0009](adr/0009-attachments-inline-local.md)).
+**Exportação:** `toi.exportHistory()` devolve um retrato do histórico no formato `toi.history` versão 1 (`app/export.ts`); a UI só transforma em arquivo. Lê apenas a porta de Conversas, então a Chave e as Configurações, Instruções incluídas, não têm caminho até o arquivo. Mensagem em Fluxo sai como `interrupted`. O Esforço da Conversa e da Mensagem entrou como campo novo, compatível, sem subir `version`; as Partes `file` (com os bytes em base64), `redacted_reasoning`, `tool_call` e `tool_result` também. O arquivo é um `Blob` montado por Mensagem, para o histórico não virar uma string só ([ADR 0009](adr/0009-attachments-inline-local.md)).
 
 **Anexos:** os bytes preparados ficam em `attachments`, fora da Mensagem, para o `watchMessages` não reler megabytes a cada flush. A UI lê cada imagem quando ela chega perto da tela; PDF e texto só são lidos para baixar. Decisão e alternativas no ADR 0009.
 
@@ -259,7 +262,7 @@ Classificação por HTTP status; `error.type` reforça 429/529 e classifica os e
 | `unreachable` | `TypeError` no fetch, offline, CORS bloqueado ou Fluxo encerrado sem `finished` | Botão repetir |
 | `not_connected` | `send`/`retry` sem Chave | Abrir onboarding |
 | `flow_busy` | `send`/`retry`/apagar com Fluxo em voo ou limpeza em andamento, nesta ou em outra aba | Avisar; na própria aba o composer já fica desabilitado |
-| `storage_failed` | IndexedDB recusou o flush final (`RunResult.persistError`) ou um Anexo do histórico sumiu do store | Avisar que a resposta não foi salva; Anexo sumido falha a resposta |
+| `storage_failed` | IndexedDB recusou o flush final (`RunResult.persistError`), um Anexo do histórico sumiu do store ou as Instruções não foram lidas | Avisar que a resposta não foi salva; Anexo sumido ou Instruções ilegíveis falham a resposta sem rede |
 | `storage_full` | `QuotaExceededError` ao gravar o envio (`startTurn`) | Avisar; texto e Anexos voltam ao composer |
 | `unknown` | qualquer outro, inclusive chamada de Ferramenta quebrada pelo Provedor e resposta ilegível ou fora do contrato (stream, lista de Modelos) | Detalhe técnico |
 
@@ -286,7 +289,7 @@ Não há retry automático na v1: "repetir" é sempre ação da pessoa e substit
 
 ### Crescimento do contexto
 
-Toda Mensagem reenvia o histórico, com os Anexos e, com Ferramentas, os resultados antigos do mesmo Provedor. `build-request` estima tokens com `TokenEstimator` (heurística de ~3,5 caracteres por token; imagem por área, PDF por página, texto por byte). Primeiro, enquanto o histórico passa de um dos tetos da requisição (bytes, páginas, blocos ou 80% dos tokens), troca os Anexos e os resultados de Ferramenta dos turnos antigos, do mais antigo ao mais novo, por um marcador que diz que o conteúdo saiu do contexto (o de resultado mantém as Fontes); os tetos e o porquê estão no [ADR 0009](adr/0009-attachments-inline-local.md). Depois, acima de 80% de `max_input_tokens` (ou de 200 mil quando a API não informar), descarta turnos do meio preservando o primeiro turno e os turnos mais recentes que couberem, sempre incluindo o atual. O turno atual entra mesmo se sozinho estourar o orçamento; nesse caso a API recusa com `context_overflow` e a UI oferece uma Conversa nova. Com Ferramentas, o orçamento reserva antes o espaço das Rodadas, escolhido em Configurações (20 mil, 40 mil ou 80 mil tokens, sem passar da metade do orçamento); durante a resposta, a chamada cujo resultado no teto não cabe no que sobra recebe `tool_call_limit` sem rede ([ADR 0010](adr/0010-web-tools-via-tinyfish.md)). Quando há corte, a UI avisa o que saiu do contexto: turnos do meio, Anexos antigos, resultados antigos ou uma combinação. O marcador só existe na requisição; a Mensagem gravada não muda. Contagem exata via `/v1/messages/count_tokens` fica para a v1.1.
+Toda Mensagem reenvia o histórico, com os Anexos e, com Ferramentas, os resultados antigos do mesmo Provedor. `build-request` estima tokens com `TokenEstimator` (heurística de ~3,5 caracteres por token; imagem por área, PDF por página, texto por byte). Primeiro, enquanto o histórico passa de um dos tetos da requisição (bytes, páginas, blocos ou 80% dos tokens), troca os Anexos e os resultados de Ferramenta dos turnos antigos, do mais antigo ao mais novo, por um marcador que diz que o conteúdo saiu do contexto (o de resultado mantém as Fontes); os tetos e o porquê estão no [ADR 0009](adr/0009-attachments-inline-local.md). Depois, acima de 80% de `max_input_tokens` (ou de 200 mil quando a API não informar), descarta turnos do meio preservando o primeiro turno e os turnos mais recentes que couberem, sempre incluindo o atual. O turno atual entra mesmo se sozinho estourar o orçamento; nesse caso a API recusa com `context_overflow` e a UI oferece uma Conversa nova. Com Ferramentas, o orçamento reserva antes o espaço das Rodadas, escolhido em Configurações (20 mil, 40 mil ou 80 mil tokens, sem passar da metade do orçamento); durante a resposta, a chamada cujo resultado no teto não cabe no que sobra recebe `tool_call_limit` sem rede ([ADR 0010](adr/0010-web-tools-via-tinyfish.md)). As Instruções também saem do orçamento antes de escolher o histórico e nunca são cortadas ([ADR 0013](adr/0013-instructions.md)). Quando há corte, a UI avisa o que saiu do contexto: turnos do meio, Anexos antigos, resultados antigos ou uma combinação. O marcador só existe na requisição; a Mensagem gravada não muda. Contagem exata via `/v1/messages/count_tokens` fica para a v1.1.
 
 ## 8. Segurança
 
@@ -300,7 +303,7 @@ Toda Mensagem reenvia o histórico, com os Anexos e, com Ferramentas, os resulta
 - Sem script, fonte ou analytics de terceiro. Ícones (lucide) e fontes (Geist Mono e Lora via `@fontsource-variable`) vão no bundle. O único script fora do bundle é `public/theme.js`, servido pela própria origem.
 - Markdown não carrega imagem: `![alt](url)` vira texto `[imagem: alt]`, porque buscaria um host de terceiro (e a CSP bloquearia).
 - **Ferramentas são risco residual declarado** ([ADR 0010](adr/0010-web-tools-via-tinyfish.md)). A TinyFish recebe as consultas e URLs que o Modelo escolhe e pode treinar com elas. Uma página lida pode injetar instruções. A elegibilidade impede o Modelo de construir um destino novo ou acrescentar dado a uma URL, mas não cobre:
-  - o texto da consulta da Busca;
+  - o texto da consulta da Busca, que pode levar o que está nas Instruções ([ADR 0013](adr/0013-instructions.md));
   - qual URL elegível ler e quando (cerca de 1 bit por chamada, visível ao dono da URL);
   - os redirects do destino;
   - uma URL sensível que a própria pessoa colou;
@@ -335,19 +338,19 @@ Implementação: `ui/use-messages.ts` junta deltas por frame; `ui/reveal.ts` dec
 | `domain` | título, famílias e marcação de Modelos, ritmo da resposta, tipo e dimensões pelos bytes, limites por Mensagem, forma comparável e elegibilidade de URL, aplicação de Eventos numa Rodada | Vitest puro |
 | `adapters/http`, `protocols`, `providers` | parser SSE, mappers e classificação de erros HTTP | streams SSE montados no teste: texto, raciocínio com `signature`, `redacted_thinking`, `tool_use` com `input_json_delta`, `ping`, `error`, evento desconhecido, chunk cortado no meio de um caractere Unicode; casos principais de status; `retry-after` em segundos |
 | `adapters/services` | Busca e Leitura da TinyFish: Chave no header, forma validada, Fontes só `http(s)`, falha por URL, status → erro tipado, teto de bytes, timeout, abort, `verify` | `fetch` falso; timeout com fake timers |
-| `adapters/storage` | contrato da porta, schema, transação do envio, cascata de Anexos, `storage_full` e fronteira da Chave | `MemoryStore` + Dexie com `fake-indexeddb` |
-| `app/build-request` | fusão de papéis, descarte de Mensagens vazias, elisão de Anexos e de resultados por teto, truncamento, blocos da requisição, desdobramento de Rodadas, corte na chamada sem resultado, Partes de Ferramenta só do mesmo Provedor | Vitest puro |
+| `adapters/storage` | contrato da porta, schema, transação do envio, cascata de Anexos, `storage_full`, fronteira da Chave e Instruções apagadas com `null` | `MemoryStore` + Dexie com `fake-indexeddb` |
+| `app/build-request` | fusão de papéis, descarte de Mensagens vazias, elisão de Anexos e de resultados por teto, truncamento, blocos da requisição, desdobramento de Rodadas, corte na chamada sem resultado, Partes de Ferramenta só do mesmo Provedor, Instruções em `system` e fora do orçamento | Vitest puro |
 | `app/web-tools` | idioma da Busca, validação do input, URL não elegível sem rede, corte do resultado, teto de chamadas, espaço das Rodadas, espera depois de 429, abort esperando todas as chamadas | Serviço fake |
-| `app/send-message` | enviar, abortar, falhar, retry, `finished` terminal, falha de persistência, instante do primeiro token, Anexos (bytes enviados, parar durante a leitura, Anexo sumido); Rodadas: Busca e resposta com o raciocínio reenviado, Leitura recusada na mesma Rodada da Busca, erro do Serviço, `tool_limit`, `max_tokens` no meio da chamada, chamada quebrada, parar durante a Ferramenta | Provedor fake + Serviço fake + store em memória |
+| `app/send-message` | enviar, abortar, falhar, retry, `finished` terminal, falha de persistência, instante do primeiro token, Anexos (bytes enviados, parar durante a leitura, Anexo sumido); Instruções (em `system`, as atuais ao tentar de novo, falha ao ler sem rede, parar durante a leitura, as mesmas em todas as Rodadas, URL só nelas sem Leitura); Rodadas: Busca e resposta com o raciocínio reenviado, Leitura recusada na mesma Rodada da Busca, erro do Serviço, `tool_limit`, `max_tokens` no meio da chamada, chamada quebrada, parar durante a Ferramenta | Provedor fake + Serviço fake + store em memória |
 | `app/flow` | `stop` antes do Fluxo começar, `flush`, duas abas na mesma Conversa | Provedor fake + store em memória; duas instâncias de `Flow` com os mesmos locks simulam duas abas |
 | `app/recover-interrupted` | lock livre, lock ocupado, Mensagem fechada entre listar e travar | clock fixo + store e locks em memória |
 | `adapters/locks` | exclusive, shared e a soltura assíncrona | o mesmo contrato contra o `WebLocks` sobre o `navigator.locks` real do Node e contra o `MemoryLocks` dos testes, que o espelha |
 | `app/export` | Fluxo em voo, Parte `file` com os bytes | store em memória |
-| `app/toi` | validar antes de gravar (Provedor e Serviço), Chave anterior preservada, remover só a Chave do Serviço, apagar só a Conversa em voo, recusar envio durante apagar tudo, recusar limpeza com Fluxo em outra aba, exportar no formato `toi.history` sem a Chave, atualização de Modelos sem gravar o cache depois de a Chave trocar | fakes de store, credencial, settings e Provedor; um caso com Web Locks reais |
+| `app/toi` | validar antes de gravar (Provedor e Serviço), Chave anterior preservada, remover só a Chave do Serviço, apagar só a Conversa em voo, recusar envio durante apagar tudo, recusar limpeza com Fluxo em outra aba, exportar no formato `toi.history` sem a Chave, atualização de Modelos sem gravar o cache depois de a Chave trocar, Instruções normalizadas e recusadas acima do teto | fakes de store, credencial, settings e Provedor; um caso com Web Locks reais |
 | `ui` (puro) | divisão em blocos, segmentos de texto e Ferramenta, a mescla entre store e Fluxo local, a revelação contra traces de rajada e a contagem de páginas de PDF | Vitest em Node (`tests/ui-pure.test.ts`, `tests/reveal.test.ts`, `tests/pdf-pages.test.ts`) |
 | `ui/attachments` (preparo) | rotação EXIF sem metadados, redução, PNG ou JPEG, pixels demais, formato que o navegador não abre, texto UTF-8 | Vitest em modo browser no Chromium (`tests/ui/prepare.test.tsx`) |
-| `ui` (componentes) | Markdown seguro (sem HTML cru, links, imagens, `javascript:`), highlight só em bloco fechado e pelos nomes do fence da lista curada, Markdown curado e palavras estáveis no bloco em curso, rodapé só com a resposta inteira e com a parte do cache, onboarding, enviar, parar com esc, shift+enter, linha da Busca com as Fontes, apagar com confirmação, abertura sem piscar, escolhas gravadas ou cache de Modelos ilegíveis, Configurações e "apagar tudo" com a abertura falha, cache ausente listado na API, trocar a Chave abortando a atualização da lista e manter a atual deixando-a terminar, anexar por clipe, colar e soltar, Anexo recusado, `storage_full` devolvendo o rascunho | Vitest em modo browser no Chromium (`tests/ui/`), com `createToi` real sobre stores em memória |
-| E2E | enviar (com `cache_control` no corpo), parar e tentar de novo, recarregar no meio do Fluxo, duas abas, "ir para o fim" por Mensagens mais altas que a reserva, orçamento de long task da §9, Anexos depois de recarregar e tentar de novo com eles; numa aba anterior ao deploy, Configurações, preparo de Anexo, worker do Shiki e gramática que não baixam | Playwright contra `vite preview` do build (`tests/e2e/`); só `fetch` para a Anthropic é simulado, o resto é o navegador real |
+| `ui` (componentes) | Markdown seguro (sem HTML cru, links, imagens, `javascript:`), highlight só em bloco fechado e pelos nomes do fence da lista curada, Markdown curado e palavras estáveis no bloco em curso, rodapé só com a resposta inteira e com a parte do cache, onboarding, enviar, parar com esc, shift+enter, linha da Busca com as Fontes, apagar com confirmação, abertura sem piscar, escolhas gravadas ou cache de Modelos ilegíveis, Configurações e "apagar tudo" com a abertura falha, cache ausente listado na API, trocar a Chave abortando a atualização da lista e manter a atual deixando-a terminar, anexar por clipe, colar e soltar, Anexo recusado, `storage_full` devolvendo o rascunho, Instruções (salvar, esc sem fechar com texto não salvo, teto, campo fechado sem leitura, rascunho mantido na falha) | Vitest em modo browser no Chromium (`tests/ui/`), com `createToi` real sobre stores em memória |
+| E2E | enviar (com `cache_control` no corpo), parar e tentar de novo, recarregar no meio do Fluxo, duas abas, "ir para o fim" por Mensagens mais altas que a reserva, orçamento de long task da §9, Anexos depois de recarregar e tentar de novo com eles, Instruções depois de recarregar no corpo da requisição; numa aba anterior ao deploy, Configurações, preparo de Anexo, worker do Shiki e gramática que não baixam | Playwright contra `vite preview` do build (`tests/e2e/`); só `fetch` para a Anthropic é simulado, o resto é o navegador real |
 
 Regras: teste não usa `sleep`; debounce usa fake timers e instantes vêm de clock injetado. Teste de regressão fica vermelho no código anterior. Nada de teste que só confirme wiring.
 
@@ -377,7 +380,7 @@ Publicação, domínio e CI/CD estão em [deployment.md](deployment.md).
 
 1. Importar JSON no formato da exportação (`toi.history`).
 2. Mostrar o raciocínio gravado.
-3. System prompt e parâmetros (temperatura, `max_tokens`).
+3. Parâmetros (temperatura, `max_tokens`).
 4. Contagem exata de tokens via `/v1/messages/count_tokens`.
 5. Busca no histórico e no texto.
 6. Segundo Provedor (OpenAI, depois OpenCode Go e Google), sobre a separação do [ADR 0008](adr/0008-provider-and-protocol.md).

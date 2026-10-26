@@ -39,8 +39,8 @@ export interface ChatRequest {
    */
   reasoning: 'on' | 'off';
   messages: ChatMessage[];
-  /** Instrução de sistema; campo próprio, nunca uma Mensagem. */
-  system?: string;
+  /** Instrução de sistema; campo próprio, nunca uma Mensagem. `null` sem nenhuma. */
+  system: string | null;
   /** Vazio quando o toi não oferece Ferramentas. */
   tools: ToolDefinition[];
 }

@@ -123,7 +123,7 @@ export const toAnthropicPayload = async (
   max_tokens: request.maxTokens,
   stream: true,
   cache_control: { type: 'ephemeral' },
-  ...(request.system === undefined ? {} : { system: request.system }),
+  ...(request.system === null ? {} : { system: request.system }),
   ...(thinking === null ? {} : { thinking }),
   output_config: { effort: request.effort },
   ...(request.tools.length === 0 ? {} : { tools: request.tools.map(toTool) }),

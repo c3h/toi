@@ -28,6 +28,7 @@ import {
   testModel,
   textEvents,
   toolCall,
+  UnreadableInstructions,
   untilAborted,
   usage,
 } from '../helpers';
@@ -124,6 +125,11 @@ class FailingSettings extends MemorySettingsStore {
   }
 }
 
+const openSettings = async (screen: Awaited<ReturnType<typeof render>>) => {
+  await connect(screen);
+  await userEvent.click(screen.getByRole('button', { name: /configurações/ }));
+};
+
 describe('App', () => {
   it('mostra o erro tipado e não sai do onboarding com Chave inválida', async () => {
     const screen = await mount(() => new FailingProvider([]));
@@ -200,9 +206,8 @@ describe('App', () => {
     const screen = await mount(() => new ScriptedProvider(replyEvents()), {
       tools: new FakeWebTools(),
     });
-    await connect(screen);
+    await openSettings(screen);
 
-    await userEvent.click(screen.getByRole('button', { name: /configurações/ }));
     const group = screen.getByRole('group', { name: 'espaço por resposta' });
     await expect.element(group.getByRole('radio', { name: /40 mil · padrão/ })).toBeChecked();
 
@@ -518,6 +523,76 @@ const pngFile = async (name: string): Promise<File> => {
   context.fillRect(0, 0, 30, 20);
   return new File([await canvas.convertToBlob({ type: 'image/png' })], name);
 };
+
+describe('App: Instruções', () => {
+  it('salva as Instruções, que vão no envio seguinte', async () => {
+    const provider = new ScriptedProvider(replyEvents());
+    const screen = await mount(() => provider);
+    await openSettings(screen);
+
+    const field = screen.getByLabelText('instruções');
+    await expect.element(field).toBeEnabled();
+    await userEvent.fill(field, '  responda curto  ');
+    await expect.element(screen.getByText('não salvo')).toBeVisible();
+    await userEvent.click(screen.getByRole('button', { name: 'salvar' }));
+    await expect.element(screen.getByText('salvo.')).toBeVisible();
+    await expect.element(field).toHaveValue('responda curto');
+
+    await userEvent.click(screen.getByRole('button', { name: /voltar/ }));
+    await userEvent.fill(screen.getByLabelText('mensagem'), 'Pergunta');
+    await userEvent.keyboard('{Enter}');
+
+    await expect.element(screen.getByText('Olá')).toBeVisible();
+    expect(provider.requests[0]!.system).toBe('responda curto');
+  });
+
+  it('com texto não salvo, esc sai do campo sem fechar; acima do teto não salva', async () => {
+    const screen = await mount(() => new ScriptedProvider(replyEvents()));
+    await openSettings(screen);
+
+    const field = screen.getByLabelText('instruções');
+    await userEvent.fill(field, 'rascunho');
+    await userEvent.keyboard('{Escape}');
+    await expect.element(screen.getByRole('heading', { name: 'configurações' })).toBeVisible();
+    await expect.element(field).toHaveValue('rascunho');
+
+    await userEvent.fill(field, 'x'.repeat(4_001));
+    await expect.element(screen.getByText('4.001 de 4.000 caracteres')).toBeVisible();
+    await expect.element(screen.getByRole('button', { name: 'salvar' })).toBeDisabled();
+  });
+
+  it('sem ler as gravadas, não abre o campo', async () => {
+    const screen = await mount(() => new ScriptedProvider(replyEvents()), {
+      settings: new UnreadableInstructions(),
+    });
+    await openSettings(screen);
+
+    await expect
+      .element(screen.getByText(/não deu para ler as instruções salvas/))
+      .toBeVisible();
+    expect(screen.getByLabelText('instruções').query()).toBeNull();
+  });
+
+  it('gravar que falha mantém o rascunho', async () => {
+    class FailingSave extends MemorySettingsStore {
+      override async saveInstructions(): Promise<void> {
+        throw new Error('cheio');
+      }
+    }
+    const screen = await mount(() => new ScriptedProvider(replyEvents()), {
+      settings: new FailingSave(),
+    });
+    await openSettings(screen);
+
+    const field = screen.getByLabelText('instruções');
+    await userEvent.fill(field, 'responda curto');
+    await userEvent.click(screen.getByRole('button', { name: 'salvar' }));
+
+    await expect.element(screen.getByRole('alert')).toHaveTextContent('algo deu errado.');
+    await expect.element(field).toHaveValue('responda curto');
+    await expect.element(screen.getByText('não salvo')).toBeVisible();
+  });
+});
 
 describe('App: Anexos', () => {
   it('anexa pelo clipe, colando e soltando, e envia sem texto', async () => {

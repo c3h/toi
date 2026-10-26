@@ -5,6 +5,7 @@ import { createToi, type ToiDeps } from '../src/app/toi';
 import { tinyfishInfo } from '../src/adapters/services/tinyfish/info';
 import { appError } from '../src/domain/error';
 import type { Model } from '../src/domain/model';
+import { MAX_INSTRUCTIONS_CHARS } from '../src/domain/instructions';
 import { DEFAULT_TOOL_SPACE } from '../src/domain/web';
 import type { StreamEvent } from '../src/domain/stream';
 import type { ChatProvider, ChatRequest } from '../src/ports/chat-provider';
@@ -121,6 +122,20 @@ describe('createToi', () => {
     expect(await credentials.get('anthropic')).toBeNull();
     expect(settings.values.size).toBe(0);
     expect(toi.connected()).toBe(false);
+  });
+
+  it('grava as Instruções sem espaço nas pontas, apaga vazias e recusa acima do teto', async () => {
+    const { deps } = await setup();
+    const toi = await createToi(deps);
+
+    await toi.saveInstructions('  prefiro respostas curtas\nem português  ');
+    expect(await toi.instructions()).toBe('prefiro respostas curtas\nem português');
+
+    await expect(toi.saveInstructions('x'.repeat(MAX_INSTRUCTIONS_CHARS + 1))).rejects.toThrow();
+    expect(await toi.instructions()).toBe('prefiro respostas curtas\nem português');
+
+    await toi.saveInstructions('   ');
+    expect(await toi.instructions()).toBeNull();
   });
 
   it('valida a Chave do Serviço antes de gravar e mantém a anterior quando a nova falha', async () => {

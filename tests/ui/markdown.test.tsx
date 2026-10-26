@@ -71,9 +71,13 @@ describe('Prose', () => {
   it('colore as linguagens da lista pelos nomes do fence; fora dela, o código fica sem cor', async () => {
     const tokens = async (lang: string, code: string) => {
       const screen = await render(<Prose text={`\`\`\`${lang}\n${code}\n\`\`\``} open={false} />);
-      // `aria-busy` cai quando o worker responde, com ou sem destaque.
+      // `aria-busy` cai quando o worker responde, com ou sem destaque. A primeira resposta de
+      // cada gramática compila as regex dela no engine em JavaScript: a do C++ passa do 1 s
+      // padrão do poll num runner do CI.
       await expect
-        .poll(() => screen.container.querySelector('pre')?.getAttribute('aria-busy'))
+        .poll(() => screen.container.querySelector('pre')?.getAttribute('aria-busy'), {
+          timeout: 5000,
+        })
         .toBe('false');
       expect(screen.container.querySelector('code')?.textContent).toBe(code);
       return screen.container.querySelectorAll('.token').length;
