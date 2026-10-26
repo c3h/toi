@@ -8,13 +8,14 @@ import {
   type SendOptions,
 } from '../src/app/send-message';
 import { AppError } from '../src/domain/error';
-import { textOf, type Message } from '../src/domain/message';
+import { textOf } from '../src/domain/message';
 import type { StreamEvent } from '../src/domain/stream';
 import {
   abortError,
   baseDeps,
   deferred,
   expectCachedPrefix,
+  FailingWrites,
   gatedProvider,
   imageFile,
   MemorySettingsStore,
@@ -130,22 +131,13 @@ describe('sendMessage', () => {
   });
 
   it('expõe falha de persistência sem derrubar o Fluxo', async () => {
-    class FailingStore extends MemoryStore {
-      fail = false;
-
-      override async putMessage(message: Message): Promise<void> {
-        if (this.fail) throw new Error('disco cheio');
-        await super.putMessage(message);
-      }
-    }
-
-    const store = new FailingStore();
+    const store = new FailingWrites();
     const { deps } = await baseDeps(store);
 
     const provider = new ScriptedProvider(async function* (): AsyncGenerator<StreamEvent> {
       for (const event of replyEvents('ok')) {
         // A resposta chega inteira; só o flush final falha.
-        if (event.type === 'finished') store.fail = true;
+        if (event.type === 'finished') store.failing = true;
         yield event;
       }
     });
