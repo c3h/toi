@@ -42,7 +42,7 @@
     "size-limit": "^14.2.0",
     "tailwindcss": "^4.3.3",
     "typescript": "^7.0.2",
-    "vite": "^8.3.4",
+    "vite": "^8.3.5",
     "vitest": "^4.0.0",
     "vitest-browser-react": "^2.3.0",
     "wrangler": "4.151.3"
