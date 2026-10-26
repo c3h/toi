@@ -113,3 +113,48 @@ test('ir para o fim aparece só fora do fim e leva de volta', async ({ page }) =
   await expect(last).toBeInViewport();
   await expect(toEnd).toBeHidden();
 });
+
+test('segue o fim quando a rolagem chega com a lista já crescida', async ({ page }) => {
+  await connect(page);
+  const paragraphs = Array.from({ length: 40 }, (_, index) => `Parágrafo ${index}.`);
+  await setMock(page, { reply: paragraphs.join('\n\n'), deltas: 1 });
+  await send(page, 'Pergunta');
+  await expect(page.getByTitle(/tokens de entrada/)).toBeInViewport();
+
+  // Como a Mensagem que troca a altura reservada pela real (`content-visibility`): a lista
+  // cresce, e o evento de rolagem chega antes de o ResizeObserver acompanhar.
+  await page.evaluate(() => {
+    const answer = document.querySelectorAll('article')[1]!;
+    const grown = document.createElement('p');
+    grown.textContent = 'Cresceu.';
+    grown.style.marginTop = '200vh';
+    answer.append(grown);
+    answer.closest('.overflow-y-auto')!.dispatchEvent(new Event('scroll'));
+  });
+
+  await expect(page.getByText('Cresceu.', { exact: true })).toBeInViewport();
+  await expect(page.getByRole('button', { name: 'ir para o fim' })).toBeHidden();
+});
+
+test('abrir outra Conversa começa no fim, mesmo vindo do topo da anterior', async ({ page }) => {
+  await connect(page);
+  const reply = (tag: string) =>
+    Array.from({ length: 30 }, (_, index) => `${tag}, parágrafo ${index}.`).join('\n\n');
+  await setMock(page, { reply: reply('A'), deltas: 1 });
+  await send(page, 'Conversa A');
+  await expect(page.getByText('A, parágrafo 29.', { exact: true })).toBeInViewport();
+
+  await page.getByRole('button', { name: 'nova conversa' }).click();
+  await setMock(page, { reply: reply('B'), deltas: 1 });
+  await send(page, 'Conversa B');
+  await expect(page.getByText('B, parágrafo 29.', { exact: true })).toBeInViewport();
+
+  // No topo, a lista vazia entre uma Conversa e outra não rola.
+  await page.getByText('B, parágrafo 0.', { exact: true }).hover();
+  await page.mouse.wheel(0, -100_000);
+  await expect(page.getByText('Conversa B', { exact: true })).toBeInViewport();
+
+  await page.getByRole('button', { name: 'conversa a', exact: true }).click();
+  await expect(page.getByText('A, parágrafo 29.', { exact: true })).toBeInViewport();
+  await expect(page.getByRole('button', { name: 'ir para o fim' })).toBeHidden();
+});
