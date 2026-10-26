@@ -304,6 +304,8 @@ export const Chat = ({
   const picker = useRef<HTMLInputElement>(null);
   const scroller = useRef<HTMLDivElement>(null);
   const following = useRef(true);
+  // O `scrollTop` do último evento de rolagem: conteúdo que cresce nunca o diminui, só a pessoa.
+  const lastTop = useRef(0);
   // "Ir para o fim" em curso: segue até o fim, mesmo que ele ande no caminho.
   const heading = useRef(false);
   const [atBottom, setAtBottom] = useState(true);
@@ -313,12 +315,24 @@ export const Chat = ({
 
   useImperativeHandle(ref, () => ({ focus: () => input.current?.focus() }), []);
 
+  // Conversa que abre começa no fim, onde quer que a anterior tenha ficado: a lista vazia
+  // entre uma e outra nem sempre rola (já no topo) para o `onScroll` dizer isso.
+  useLayoutEffect(() => {
+    following.current = true;
+    heading.current = false;
+    setAtBottom(true);
+  }, [conversationId]);
+
   // Acompanha o fim só se a pessoa já estava lá. A lista cresce com Mensagens
   // novas e com a revelação, que avança entre uma mudança de Mensagens e outra.
+  // Com "ir para o fim" em curso, quem acompanha é o `scrollend`, sem cortar a
+  // rolagem suave.
   const followList = useCallback((content: HTMLDivElement) => {
     const observer = new ResizeObserver(() => {
       const element = scroller.current;
-      if (element && following.current) element.scrollTop = element.scrollHeight;
+      if (element && following.current && !heading.current) {
+        element.scrollTop = element.scrollHeight;
+      }
     });
     observer.observe(content);
     return () => observer.disconnect();
@@ -396,7 +410,13 @@ export const Chat = ({
         // `relative`: o que é absoluto dentro (como `sr-only`) rola aqui, não estica a página.
         className="relative min-h-0 flex-1 overflow-y-auto px-4 pt-8 pb-6 sm:px-8"
         onScroll={(event) => {
-          following.current = nearBottom(event.currentTarget);
+          const element = event.currentTarget;
+          // Quem acompanha o fim só o larga rolando para cima. O evento pode chegar com a
+          // lista já crescida e o ResizeObserver ainda por rolar (a Mensagem nova que troca a
+          // altura reservada pela real): medir só a distância ao fim largaria sozinho.
+          following.current =
+            nearBottom(element) || (following.current && element.scrollTop >= lastTop.current);
+          lastTop.current = element.scrollTop;
           setAtBottom(following.current);
         }}
         onScrollEnd={(event) => {
