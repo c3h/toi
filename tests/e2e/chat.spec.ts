@@ -158,3 +158,39 @@ test('abrir outra Conversa começa no fim, mesmo vindo do topo da anterior', asy
   await expect(page.getByText('A, parágrafo 29.', { exact: true })).toBeInViewport();
   await expect(page.getByRole('button', { name: 'ir para o fim' })).toBeHidden();
 });
+
+test('rolar um pouco para cima no meio do Fluxo larga o fim', async ({ page }) => {
+  await connect(page);
+  const paragraphs = Array.from({ length: 60 }, (_, index) => `Parágrafo ${index}.`);
+  await setMock(page, { reply: paragraphs.join('\n\n'), deltas: 200, delayMs: 10 });
+  await send(page, 'Pergunta');
+  await expect(page.getByText('Parágrafo 20.', { exact: true })).toBeInViewport();
+
+  // Como um trackpad: passos menores do que a revelação acrescenta entre um frame e outro, e
+  // somados ainda perto do fim.
+  const conversation = page.locator('.overflow-y-auto', { has: page.locator('article') });
+  const box = (await conversation.boundingBox())!;
+  await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+  for (let step = 0; step < 5; step += 1) {
+    await page.mouse.wheel(0, -4);
+    await page.evaluate(() => new Promise(requestAnimationFrame));
+  }
+
+  const toEnd = page.getByRole('button', { name: 'ir para o fim' });
+  await expect(toEnd).toBeVisible();
+  await expect(page.getByTitle(/tokens de entrada/)).toBeAttached();
+  await expect(page.getByText('Parágrafo 59.', { exact: true })).not.toBeInViewport();
+  await expect(toEnd).toBeVisible();
+});
+
+test('o composer que cresce não esconde o fim acompanhado', async ({ page }) => {
+  await connect(page);
+  const paragraphs = Array.from({ length: 40 }, (_, index) => `Parágrafo ${index}.`);
+  await setMock(page, { reply: paragraphs.join('\n\n'), deltas: 1 });
+  await send(page, 'Pergunta');
+  const usage = page.getByTitle(/tokens de entrada/);
+  await expect(usage).toBeInViewport();
+
+  await page.getByLabel('mensagem').fill('linha\n'.repeat(12));
+  await expect(usage).toBeInViewport();
+});
