@@ -8,7 +8,8 @@ import { ageGroup } from './support';
 interface SidebarProps {
   conversations: Conversation[];
   selected: ConversationId | null;
-  running: ConversationId | null;
+  /** Conversas respondendo nesta aba. */
+  running: ReadonlySet<ConversationId>;
   settingsOpen: boolean;
   open: boolean;
   now: number;
@@ -244,7 +245,7 @@ export const Sidebar = ({
                   key={conversation.id}
                   conversation={conversation}
                   active={conversation.id === selected && !settingsOpen}
-                  running={conversation.id === running}
+                  running={running.has(conversation.id)}
                   onSelect={() => onSelect(conversation.id)}
                   onRename={(title) => onRename(conversation.id, title)}
                   onDelete={() => onDelete(conversation.id)}

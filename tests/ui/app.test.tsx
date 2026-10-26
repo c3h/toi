@@ -13,8 +13,10 @@ import { WEB_SEARCH } from '../../src/domain/web';
 import {
   deferred,
   FailingProvider,
+  FailingWrites,
   FakeWebTools,
   gatedProvider,
+  gatedStreams,
   hit,
   makeModel,
   MemoryCredentialStore,
@@ -265,6 +267,91 @@ describe('App', () => {
     await expect.element(screen.getByText('resposta interrompida.')).toBeVisible();
     await expect.element(screen.getByText('a', { exact: true })).toBeVisible();
     await expect.element(screen.getByRole('button', { name: 'tentar de novo' })).toBeVisible();
+  });
+
+  it('pergunta numa Conversa nova enquanto outra responde; esc para só a que está à vista', async () => {
+    const { provider, delta } = gatedStreams();
+    const screen = await mount(() => provider);
+    await connect(screen);
+
+    await userEvent.fill(screen.getByLabelText('mensagem'), 'Primeira');
+    await userEvent.keyboard('{Enter}');
+    await delta(0);
+    await expect.element(screen.getByRole('button', { name: /parar/ })).toBeVisible();
+
+    await userEvent.click(screen.getByRole('button', { name: 'nova conversa' }));
+    await expect.element(screen.getByRole('button', { name: /parar/ })).not.toBeInTheDocument();
+    await userEvent.fill(screen.getByLabelText('mensagem'), 'Segunda');
+    await userEvent.keyboard('{Enter}');
+    await delta(1);
+
+    const responding = screen.getByRole('navigation', { name: 'conversas' }).getByLabelText('respondendo');
+    await expect.poll(() => responding.elements()).toHaveLength(2);
+
+    await userEvent.keyboard('{Escape}');
+
+    await expect.element(screen.getByText('resposta interrompida.')).toBeVisible();
+    await expect.element(screen.getByText('r1', { exact: true })).toBeVisible();
+    await expect.poll(() => responding.elements()).toHaveLength(1);
+
+    await userEvent.click(screen.getByRole('navigation', { name: 'conversas' }).getByTitle('primeira'));
+    await expect.element(screen.getByText('r0', { exact: true })).toBeVisible();
+    await expect.element(screen.getByRole('button', { name: /parar/ })).toBeVisible();
+  });
+
+  it('o aviso de uma resposta que termina em segundo plano espera a Conversa dela abrir', async () => {
+    // Com a escrita falhando, a resposta que termina ainda grava o `updatedAt`, logo antes de o App
+    // receber o resultado: é o marco de que ela acabou.
+    const finished = deferred();
+    class MarkingFinish extends FailingWrites {
+      override async updateConversation(
+        ...args: Parameters<MemoryStore['updateConversation']>
+      ): ReturnType<MemoryStore['updateConversation']> {
+        const updated = await super.updateConversation(...args);
+        if (this.failing) finished.resolve();
+        return updated;
+      }
+    }
+
+    const release = deferred();
+    const provider = new ScriptedProvider({
+      rounds: [
+        async function* () {
+          const events = replyEvents('Resposta da primeira');
+          yield* events.slice(0, -2);
+          await release.promise;
+          yield* events.slice(-2);
+        },
+        async function* (signal: AbortSignal) {
+          yield* replyEvents('Em curso').slice(0, -2);
+          await untilAborted(signal);
+        },
+      ],
+    });
+    const store = new MarkingFinish();
+    const screen = await mount(() => provider, { store });
+    await connect(screen);
+
+    await userEvent.fill(screen.getByLabelText('mensagem'), 'Primeira');
+    await userEvent.keyboard('{Enter}');
+    await expect.element(screen.getByText('Resposta da primeira')).toBeVisible();
+    await userEvent.click(screen.getByRole('button', { name: 'nova conversa' }));
+    await userEvent.fill(screen.getByLabelText('mensagem'), 'Segunda');
+    await userEvent.keyboard('{Enter}');
+    await expect.element(screen.getByText('Em curso')).toBeVisible();
+
+    // A primeira termina sem conseguir gravar, com a pessoa na segunda.
+    store.failing = true;
+    release.resolve();
+    await finished.promise;
+    const navigation = screen.getByRole('navigation', { name: 'conversas' });
+    await expect.poll(() => navigation.getByLabelText('respondendo').elements()).toHaveLength(1);
+    await expect.element(screen.getByText(/não foi salva/)).not.toBeInTheDocument();
+
+    await userEvent.click(navigation.getByTitle('primeira'));
+    await expect.element(screen.getByText(/não foi salva/)).toBeVisible();
+    await expect.element(screen.getByText('Resposta da primeira')).toBeVisible();
+    await expect.element(screen.getByText(/tokens de entrada/)).toBeVisible();
   });
 
   it('shift+enter quebra linha sem enviar', async () => {

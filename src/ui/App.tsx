@@ -8,6 +8,7 @@ import {
   useMemo,
   useRef,
   useState,
+  useSyncExternalStore,
   type ReactNode,
 } from 'react';
 import type { RunResult } from '../app/send-message';
@@ -94,12 +95,27 @@ const Workspace = ({ toi, onErasedAll }: { toi: Toi; onErasedAll: () => void }) 
   const [modelPicksError, setModelPicksError] = useState<ModelPicksError | null>(null);
   const [conversations, setConversations] = useState<Conversation[] | null>(null);
   const [selected, setSelected] = useState<ConversationId | null>(selection.read);
-  const [running, setRunning] = useState<ConversationId | null>(null);
-  const [notice, setNotice] = useState<Notice | null>(null);
+  // Conversas respondendo nesta aba; o Flow é a fonte, a tela só lê.
+  const running = useSyncExternalStore(toi.flow.watch, toi.flow.active);
+  // Um aviso por Conversa (`null` é o rascunho): o de um Fluxo que termina em segundo plano espera a
+  // pessoa abrir a Conversa dele, nunca aparece na de outra.
+  const [notices, setNotices] = useState<ReadonlyMap<ConversationId | null, Notice>>(new Map());
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const chat = useRef<ChatHandle>(null);
 
   const conversation = conversations?.find((item) => item.id === selected) ?? null;
+  const notice = notices.get(selected) ?? null;
+  const responding = selected !== null && running.has(selected);
+
+  const putNotice = useCallback((id: ConversationId | null, next: Notice | null) => {
+    setNotices((current) => {
+      if (next === null && !current.has(id)) return current;
+      const updated = new Map(current);
+      if (next === null) updated.delete(id);
+      else updated.set(id, next);
+      return updated;
+    });
+  }, []);
 
   useEffect(() => toi.watchConversations(setConversations), [toi]);
   useEffect(() => followSystemTheme(), []);
@@ -170,19 +186,6 @@ const Workspace = ({ toi, onErasedAll }: { toi: Toi; onErasedAll: () => void }) 
     if (connected) void loadModels(false);
   }, [connected, loadModels]);
 
-  const select = useCallback((id: ConversationId | null) => {
-    setSelected(id);
-    selection.write(id);
-    setNotice(null);
-    setSidebarOpen(false);
-    setSettings(null);
-  }, []);
-
-  // Seleção que não existe mais (apagada aqui ou em outra aba) vira rascunho.
-  useEffect(() => {
-    if (conversations !== null && selected !== null && !conversation) select(null);
-  }, [conversations, selected, conversation, select]);
-
   const list = models.list;
   const options = useMemo(() => pickedModels(list, modelPicks), [list, modelPicks]);
   const model =
@@ -192,10 +195,27 @@ const Workspace = ({ toi, onErasedAll }: { toi: Toi; onErasedAll: () => void }) 
 
   // Os handlers que descem ao Chat têm identidade estável, para o `memo` das Mensagens e dos
   // seletores acertar; o que leem do render vem daqui, atualizado a cada commit.
-  const latest = useRef({ conversation, model, effort });
+  const latest = useRef({ selected, conversation, model, effort });
   useLayoutEffect(() => {
-    latest.current = { conversation, model, effort };
+    latest.current = { selected, conversation, model, effort };
   });
+
+  // Sair de uma Conversa dispensa o aviso dela.
+  const select = useCallback(
+    (id: ConversationId | null) => {
+      putNotice(latest.current.selected, null);
+      setSelected(id);
+      selection.write(id);
+      setSidebarOpen(false);
+      setSettings(null);
+    },
+    [putNotice],
+  );
+
+  // Seleção que não existe mais (apagada aqui ou em outra aba) vira rascunho.
+  useEffect(() => {
+    if (conversations !== null && selected !== null && !conversation) select(null);
+  }, [conversations, selected, conversation, select]);
 
   // Otimista; se não grava, volta ao que está salvo e diz por quê.
   const changeModelPicks = async (picks: ModelPicks) => {
@@ -234,25 +254,29 @@ const Workspace = ({ toi, onErasedAll }: { toi: Toi; onErasedAll: () => void }) 
     setLastEffort(sentEffort);
   }, []);
 
+  // O aviso vai para a Conversa do Fluxo, onde quer que a pessoa esteja quando ele termina.
   const run = useCallback(
     async (conversationId: ConversationId, start: () => Promise<RunResult>): Promise<boolean> => {
-      setRunning(conversationId);
-      setNotice(null);
+      putNotice(conversationId, null);
 
       try {
-        setNotice(noticeFrom(await start()));
+        putNotice(conversationId, noticeFrom(await start()));
         return true;
       } catch (cause) {
         const error = errorInfo(cause);
         if (error.code === 'not_connected') setConnected(false);
-        setNotice({ kind: 'error', error });
+        putNotice(conversationId, { kind: 'error', error });
         return false;
-      } finally {
-        setRunning(null);
       }
     },
-    [],
+    [putNotice],
   );
+
+  // Para a Conversa à vista; as outras seguem respondendo.
+  const stop = useCallback(() => {
+    const { selected } = latest.current;
+    if (selected !== null) void toi.flow.stop(selected);
+  }, [toi]);
 
   const send = async (text: string, attachments: AttachmentUpload[]): Promise<boolean> => {
     if (!model) return false;
@@ -262,7 +286,7 @@ const Workspace = ({ toi, onErasedAll }: { toi: Toi; onErasedAll: () => void }) 
       try {
         target = await toi.createConversation(refOf(model), effort);
       } catch (cause) {
-        setNotice({ kind: 'error', error: errorInfo(cause) });
+        putNotice(selected, { kind: 'error', error: errorInfo(cause) });
         return false;
       }
       // Pedir cedo reduz a chance de o navegador descartar o histórico.
@@ -304,7 +328,7 @@ const Workspace = ({ toi, onErasedAll }: { toi: Toi; onErasedAll: () => void }) 
     try {
       await toi.deleteConversation(id);
     } catch (cause) {
-      setNotice({ kind: 'error', error: errorInfo(cause) });
+      putNotice(selected, { kind: 'error', error: errorInfo(cause) });
     }
   };
 
@@ -324,7 +348,7 @@ const Workspace = ({ toi, onErasedAll }: { toi: Toi; onErasedAll: () => void }) 
         return {
           label: 'atualizar modelos',
           run: () => {
-            setNotice(null);
+            putNotice(selected, null);
             void loadModels(true);
           },
         };
@@ -343,7 +367,7 @@ const Workspace = ({ toi, onErasedAll }: { toi: Toi; onErasedAll: () => void }) 
 
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key === 'Escape') {
-        if (running) void toi.flow.stop();
+        if (responding) stop();
         else if (settings) setSettings(null);
         else if (sidebarOpen) setSidebarOpen(false);
         return;
@@ -366,7 +390,7 @@ const Workspace = ({ toi, onErasedAll }: { toi: Toi; onErasedAll: () => void }) 
 
     addEventListener('keydown', onKeyDown);
     return () => removeEventListener('keydown', onKeyDown);
-  }, [toi, connected, changingKey, running, settings, sidebarOpen, newConversation]);
+  }, [connected, changingKey, responding, stop, settings, sidebarOpen, newConversation]);
 
   if (!connected || changingKey) {
     return (
@@ -380,7 +404,7 @@ const Workspace = ({ toi, onErasedAll }: { toi: Toi; onErasedAll: () => void }) 
           setModels({ list: fresh, stale: null, refreshing: false });
           setConnected(true);
           setChangingKey(false);
-          setNotice(null);
+          setNotices(new Map());
         }}
       />
     );
@@ -529,16 +553,16 @@ const Workspace = ({ toi, onErasedAll }: { toi: Toi; onErasedAll: () => void }) 
                 modelOptions={options}
                 model={model}
                 effort={effort}
-                running={running !== null}
+                running={responding}
                 notice={notice}
                 noticeAction={noticeAction(notice)}
                 onModelChange={changeModel}
                 onEffortChange={changeEffort}
                 onManageModels={manageModels}
                 onSend={send}
-                onStop={() => void toi.flow.stop()}
+                onStop={stop}
                 onRetry={retry}
-                onDismissNotice={() => setNotice(null)}
+                onDismissNotice={() => putNotice(selected, null)}
                 onOpenSearchSettings={openSearchSettings}
               />
             )}
