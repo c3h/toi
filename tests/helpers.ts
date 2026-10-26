@@ -265,6 +265,21 @@ export class MemoryStore implements ConversationStore {
   }
 }
 
+/** Armazenamento que enche: com `failing`, gravar uma Mensagem e apagar falham; `startTurn`, não. */
+export class FailingWrites extends MemoryStore {
+  failing = false;
+
+  override async putMessage(message: Message): Promise<void> {
+    if (this.failing) throw new Error('QuotaExceededError');
+    await super.putMessage(message);
+  }
+
+  override async deleteConversation(id: string): Promise<void> {
+    if (this.failing) throw new Error('UnknownError');
+    await super.deleteConversation(id);
+  }
+}
+
 export class MemoryCredentialStore implements CredentialStore {
   readonly #keys = new Map<CredentialOwner, string>();
 
@@ -489,22 +504,34 @@ export const untilAborted = (signal: AbortSignal): Promise<never> =>
     signal.addEventListener('abort', () => reject(abortError()), { once: true });
   });
 
-/** Emite `text` num bloco aberto, sinaliza `delta` e espera o abort. */
-export const gatedProvider = (text = 'a') => {
-  const { promise: delta, resolve: signalDelta } = deferred();
+/**
+ * Para Fluxos em paralelo: cada pedido emite o próprio texto (`r0`, `r1`…)
+ * num bloco aberto, sinaliza `delta(n)` e espera o abort.
+ */
+export const gatedStreams = (text = (n: number) => `r${n}`) => {
+  const gates: Array<ReturnType<typeof deferred>> = [];
+  const gate = (n: number) => (gates[n] ??= deferred());
+  let calls = 0;
 
   const provider = new ScriptedProvider(async function* (
     signal: AbortSignal,
   ): AsyncGenerator<StreamEvent> {
+    const n = calls++;
     yield { type: 'started', model: testModel.id, usage: usage(3, 0) };
     yield { type: 'part_started', index: 0, part: { type: 'text' } };
-    yield { type: 'delta', index: 0, part: 'text', text };
-    signalDelta();
+    yield { type: 'delta', index: 0, part: 'text', text: text(n) };
+    gate(n).resolve();
 
     await untilAborted(signal);
   });
 
-  return { provider, delta };
+  return { provider, delta: (n: number) => gate(n).promise };
+};
+
+/** Emite `text` num bloco aberto, sinaliza `delta` e espera o abort. */
+export const gatedProvider = (text = 'a') => {
+  const { provider, delta } = gatedStreams(() => text);
+  return { provider, delta: delta(0) };
 };
 
 interface BuiltDeps {

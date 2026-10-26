@@ -1,9 +1,10 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { WebLocks } from '../src/adapters/locks/web';
 import type { HistoryExport } from '../src/app/export';
-import { createToi, type ToiDeps } from '../src/app/toi';
+import { createToi, type Toi, type ToiDeps } from '../src/app/toi';
 import { tinyfishInfo } from '../src/adapters/services/tinyfish/info';
 import { appError } from '../src/domain/error';
+import { textOf, type Message } from '../src/domain/message';
 import type { Model } from '../src/domain/model';
 import { MAX_INSTRUCTIONS_CHARS } from '../src/domain/instructions';
 import { DEFAULT_TOOL_SPACE } from '../src/domain/web';
@@ -13,9 +14,11 @@ import type { ServiceAdapter } from '../src/ports/web-tools';
 import {
   deferred,
   FailingProvider,
+  FailingWrites,
   FakeWebTools,
   flowDeps,
   gatedProvider,
+  gatedStreams,
   makeConversation,
   makeModel,
   MemoryCredentialStore,
@@ -27,6 +30,10 @@ import {
   sendInput,
   testModel,
 } from './helpers';
+
+afterEach(() => {
+  vi.useRealTimers();
+});
 
 /** Nenhum destes testes desiste de validar uma Chave. */
 const signal = new AbortController().signal;
@@ -234,10 +241,10 @@ describe('createToi', () => {
 
     await toi.deleteConversation('c2');
 
-    expect(toi.flow.active()).toBe('c1');
+    expect(toi.flow.active()).toEqual(new Set(['c1']));
     expect(await store.getConversation('c2')).toBeNull();
 
-    await toi.flow.stop();
+    await toi.flow.stop('c1');
     expect((await pending).message.status).toBe('interrupted');
   });
 
@@ -307,7 +314,7 @@ describe('createToi', () => {
     await expect(tabB.deleteConversation('c1')).rejects.toMatchObject({ code: 'flow_busy' });
     expect(await store.getConversation('c1')).not.toBeNull();
 
-    await tabA.flow.stop();
+    await tabA.flow.stop('c1');
     await pending;
 
     await tabB.eraseConversations();
@@ -339,25 +346,100 @@ describe('createToi', () => {
     expect(file).not.toContain('sk-secret');
   });
 
-  it('com Web Locks reais, apagar Conversas para o próprio Fluxo e limpa', async () => {
+  it('com Web Locks reais, apagar Conversas para os Fluxos em paralelo da aba e limpa', async () => {
     const { store, credentials, deps } = await setup();
     await credentials.set('anthropic', 'sk-test');
     await store.putConversation(makeConversation('c1'));
+    await store.putConversation(makeConversation('c2'));
 
-    const { provider, delta } = gatedProvider();
+    const { provider, delta } = gatedStreams();
     const toi = await createToi({
       ...deps,
       locks: new WebLocks(navigator.locks),
       providers: providersOf(() => provider),
     });
 
-    const pending = toi.flow.send(sendInput());
-    await delta;
+    const first = toi.flow.send(sendInput());
+    const second = toi.flow.send(sendInput({ conversationId: 'c2' }));
+    await Promise.all([delta(0), delta(1)]);
 
     await toi.eraseConversations();
 
-    expect((await pending).message.status).toBe('interrupted');
+    expect((await first).message.status).toBe('interrupted');
+    expect((await second).message.status).toBe('interrupted');
+    expect(toi.flow.active().size).toBe(0);
     expect(await store.listConversations()).toEqual([]);
+  });
+
+  /** Mensagem gravada da Conversa, com a resposta retida por cima, como a UI a lê. */
+  const shown = async (toi: Toi, conversationId: string): Promise<Message[]> => {
+    const seen = deferred();
+    let messages: Message[] = [];
+    const unwatch = toi.watchMessages(conversationId, (next) => {
+      messages = next;
+      seen.resolve();
+    });
+    await seen.promise;
+    unwatch();
+    return messages;
+  };
+
+  /** Toi com a Conversa c1 sobre um store cuja escrita o teste faz falhar. */
+  const retaining = async () => {
+    const { credentials, deps } = await setup();
+    const store = new FailingWrites();
+    await credentials.set('anthropic', 'sk-test');
+    await store.putConversation(makeConversation('c1'));
+    const provider = new ScriptedProvider(replyEvents('Resposta inteira'));
+    const toi = await createToi({ ...deps, store, providers: providersOf(() => provider) });
+    return { store, provider, toi };
+  };
+
+  it('resposta que termina sem o último flush aparece inteira ao reabrir a Conversa', async () => {
+    const { store, toi } = await retaining();
+
+    // `startTurn` grava a Mensagem `streaming`; o flush final é o que falha.
+    store.failing = true;
+    const result = await toi.flow.send(sendInput());
+    expect(result.persistError).toMatchObject({ code: 'storage_failed' });
+    expect((await store.listMessages('c1'))[1]?.status).toBe('streaming');
+
+    const reopened = await shown(toi, 'c1');
+    expect(reopened[1]).toMatchObject({ status: 'complete' });
+    expect(textOf(reopened[1]!)).toBe('Resposta inteira');
+
+    // Apagar que falha mantém a cópia; apagada de fato, ela não volta nem numa Conversa recriada.
+    await expect(toi.deleteConversation('c1')).rejects.toThrow();
+    expect(textOf((await shown(toi, 'c1'))[1]!)).toBe('Resposta inteira');
+    store.failing = false;
+    await toi.deleteConversation('c1');
+    await store.putConversation(makeConversation('c1'));
+    expect(await shown(toi, 'c1')).toEqual([]);
+  });
+
+  it('o próximo envio grava antes a resposta retida e a leva no histórico', async () => {
+    const { store, provider, toi } = await retaining();
+
+    store.failing = true;
+    await toi.flow.send(sendInput());
+
+    // Com a escrita ainda falhando, recusa sem chamar o Provedor.
+    await expect(toi.flow.send(sendInput({ text: 'E agora?' }))).rejects.toMatchObject({
+      code: 'storage_failed',
+    });
+    expect(provider.requests).toHaveLength(1);
+
+    store.failing = false;
+    await toi.flow.send(sendInput({ text: 'E agora?' }));
+
+    const [, answer] = await store.listMessages('c1');
+    expect(answer).toMatchObject({ status: 'complete' });
+    expect(textOf(answer!)).toBe('Resposta inteira');
+    expect(provider.requests[1]?.messages.map(({ role }) => role)).toEqual([
+      'user',
+      'assistant',
+      'user',
+    ]);
   });
 
   it('trocar Modelo e renomear durante o Fluxo não são desfeitos quando a resposta termina', async () => {
@@ -408,10 +490,10 @@ describe('createToi', () => {
     };
 
     const connected = async (provider: ChatProvider) => {
-      const { store, deps } = await setup();
+      const { store, settings, credentials, deps } = await setup();
       const toi = await createToi({ ...deps, providers: providersOf(() => provider) });
       await toi.connect('anthropic', 'sk-test', signal);
-      return { store, toi };
+      return { store, settings, credentials, toi };
     };
 
     it('nomeia a Conversa quando a primeira resposta termina, com o Haiku sem raciocínio', async () => {
@@ -454,6 +536,60 @@ describe('createToi', () => {
         expect((await store.getConversation('c2'))?.titleSource).toBe('generated'),
       );
       expect(titleRequests()).toHaveLength(1);
+      expect((await store.getConversation('c1'))?.titleSource).toBe('derived');
+    });
+
+    it('apagar a Conversa enquanto o Modelo do Título é escolhido não pede o Título', async () => {
+      const { provider, titleRequests } = titling(() => replyEvents());
+      const { store, settings, toi } = await connected(provider);
+      await store.putConversation(makeConversation('c1'));
+      await store.putConversation(makeConversation('c2'));
+      const choosing = deferred();
+      settings.titleModel = async () => {
+        await choosing.promise;
+        return null;
+      };
+
+      await toi.flow.send(sendInput());
+      await toi.deleteConversation('c1');
+      // A Conversa c2 serve de marco: quando ela foi nomeada, a c1 já teria pedido.
+      await toi.flow.send(sendInput({ conversationId: 'c2' }));
+      choosing.resolve();
+
+      await vi.waitFor(async () =>
+        expect((await store.getConversation('c2'))?.titleSource).toBe('generated'),
+      );
+      expect(titleRequests()).toHaveLength(1);
+    });
+
+    it('remover a Chave enquanto o Modelo do Título é escolhido não pede o Título', async () => {
+      const { provider, titleRequests } = titling(() => replyEvents());
+      const { store, settings, credentials, toi } = await connected(provider);
+      await store.putConversation(makeConversation('c1'));
+      const choosing = deferred();
+      const titleModel = settings.titleModel.bind(settings);
+      settings.titleModel = async () => {
+        await choosing.promise;
+        return titleModel();
+      };
+      const deleting = deferred();
+      const remove = credentials.delete.bind(credentials);
+      credentials.delete = async (owner) => {
+        await deleting.promise;
+        return remove(owner);
+      };
+
+      await toi.flow.send(sendInput());
+      // A escolha termina com a Chave saindo, antes de a conexão sair.
+      vi.useFakeTimers();
+      const disconnecting = toi.disconnect('anthropic');
+      await vi.advanceTimersByTimeAsync(0);
+      choosing.resolve();
+      await vi.advanceTimersByTimeAsync(0);
+      deleting.resolve();
+      await disconnecting;
+
+      expect(titleRequests()).toHaveLength(0);
       expect((await store.getConversation('c1'))?.titleSource).toBe('derived');
     });
 

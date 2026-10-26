@@ -63,7 +63,7 @@ export interface Toi {
    * (cota, limite por minuto, rede), recusa com o erro e a anterior fica.
    */
   connectService(apiKey: string, signal: AbortSignal): Promise<void>;
-  /** Para o Fluxo em voo, que usa a Chave, e a remove. */
+  /** Para os Fluxos em voo, que usam a Chave, e a remove. */
   disconnectService(): Promise<void>;
   /** Cada Mensagem que esta aba grava ou recebe em Fluxo. Devolve o cancelamento. */
   subscribe(listener: (message: Message) => void): () => void;
@@ -104,6 +104,11 @@ export interface Toi {
   changeEffort(id: ConversationId, effort: Effort): Promise<Conversation | null>;
   /** Histórico gravado, também por outra aba; ver `ConversationStore`. */
   watchConversations(listener: (conversations: Conversation[]) => void): () => void;
+  /**
+   * Mensagens gravadas, também por outra aba. Uma resposta desta aba que
+   * terminou sem o último flush aparece inteira até ser gravada, o que o
+   * próximo envio ou a próxima tentativa na Conversa tentam antes de escrever.
+   */
   watchMessages(conversationId: ConversationId, listener: (messages: Message[]) => void): () => void;
   /** O envio que a segue grava Modelo e Esforço como default das próximas. */
   createConversation(model: ModelRef, effort: Effort): Promise<Conversation>;
@@ -118,6 +123,12 @@ export interface Toi {
   attachment(id: AttachmentId): Promise<Blob>;
   /** Arquivo JSON do histórico no formato versionado de `app/export.ts`; nunca inclui a Chave. */
   exportHistory(): Promise<Blob>;
+}
+
+/** Título pedido depois da primeira resposta; `provider` é `null` até escolher o Modelo do Título. */
+interface Naming {
+  provider: ProviderId | null;
+  controller: AbortController;
 }
 
 export const createToi = async (deps: ToiDeps): Promise<Toi> => {
@@ -169,10 +180,13 @@ export const createToi = async (deps: ToiDeps): Promise<Toi> => {
     name: info.titleFamily,
   }));
 
-  // Uma tentativa de Título por Conversa, cancelada quando a Conversa ou a Chave sai.
-  const naming = new Map<ConversationId, { provider: ProviderId; controller: AbortController }>();
+  // Uma tentativa de Título por Conversa, cancelada quando a Conversa ou a Chave sai. Registrada
+  // antes de escolher o Modelo (`provider` ainda `null`), para apagar no meio também cancelar.
+  const naming = new Map<ConversationId, Naming>();
 
-  const stopNaming = (matches: (id: ConversationId, provider: ProviderId) => boolean): void => {
+  const stopNaming = (
+    matches: (id: ConversationId, provider: ProviderId | null) => boolean,
+  ): void => {
     for (const [id, task] of naming) {
       if (!matches(id, task.provider)) continue;
       task.controller.abort();
@@ -201,16 +215,19 @@ export const createToi = async (deps: ToiDeps): Promise<Toi> => {
 
   /** Sem Modelo do Título, sem Chave ou com qualquer falha, fica o Título derivado. */
   const requestTitle = async (exchange: FirstExchange) => {
-    const model = await resolveTitleModel().catch(() => null);
-    const provider = model === null ? undefined : connections.get(model.provider);
-    if (model === null || provider === undefined) return;
+    const { conversationId } = exchange;
+    const task: Naming = { provider: null, controller: new AbortController() };
+    naming.set(conversationId, task);
 
-    const controller = new AbortController();
-    naming.set(exchange.conversationId, { provider: model.provider, controller });
     try {
-      await nameConversation(deps.store, provider, model, exchange, controller.signal);
+      const model = await resolveTitleModel().catch(() => null);
+      const provider = model === null ? undefined : connections.get(model.provider);
+      if (model === null || provider === undefined || task.controller.signal.aborted) return;
+
+      task.provider = model.provider;
+      await nameConversation(deps.store, provider, model, exchange, task.controller.signal);
     } finally {
-      naming.delete(exchange.conversationId);
+      if (naming.get(conversationId) === task) naming.delete(conversationId);
     }
   };
 
@@ -225,7 +242,7 @@ export const createToi = async (deps: ToiDeps): Promise<Toi> => {
   };
 
   /**
-   * Para o Fluxo desta aba e segura os locks entre abas. Com `conversationId`,
+   * Para os Fluxos desta aba e segura os locks entre abas. Com `conversationId`,
    * só aquela Conversa; sem, o histórico inteiro.
    */
   const guarded = <T>(task: () => Promise<T>, conversationId?: ConversationId): Promise<T> =>
@@ -318,14 +335,19 @@ export const createToi = async (deps: ToiDeps): Promise<Toi> => {
     },
 
     watchConversations: (listener) => deps.store.watchConversations(listener),
-    watchMessages: (conversationId, listener) => deps.store.watchMessages(conversationId, listener),
+    watchMessages: (conversationId, listener) =>
+      deps.store.watchMessages(conversationId, (messages) =>
+        listener(control.withUnsaved(conversationId, messages)),
+      ),
     createConversation: (model, effort) => createConversation(deps, model, effort),
     renameConversation: (id, title) => renameConversation(deps, id, title),
 
-    deleteConversation(id) {
-      stopNaming((conversation) => conversation === id);
-      return guarded(() => deps.store.deleteConversation(id), id);
-    },
+    // O Título sai depois de o Fluxo parar, que pode ter terminado no meio.
+    deleteConversation: (id) =>
+      guarded(async () => {
+        stopNaming((conversation) => conversation === id);
+        await deps.store.deleteConversation(id);
+      }, id),
 
     async connect(providerId, apiKey, signal) {
       const adapter = adapters.get(providerId);
@@ -352,7 +374,8 @@ export const createToi = async (deps: ToiDeps): Promise<Toi> => {
 
     disconnect: (providerId) =>
       control.exclusive(async () => {
-        stopNaming((_, owner) => owner === providerId);
+        // O Título que ainda escolhe o Modelo também sai: a escolha pode terminar antes da conexão.
+        stopNaming((_, owner) => owner === providerId || owner === null);
         await deps.credentials.delete(providerId);
         connections.delete(providerId);
       }),
@@ -376,14 +399,15 @@ export const createToi = async (deps: ToiDeps): Promise<Toi> => {
         tools = null;
       }),
 
-    eraseConversations() {
-      stopNaming(() => true);
-      return guarded(() => deps.store.clearConversations());
-    },
+    eraseConversations: () =>
+      guarded(async () => {
+        stopNaming(() => true);
+        await deps.store.clearConversations();
+      }),
 
-    eraseAll() {
-      stopNaming(() => true);
-      return guarded(async () => {
+    eraseAll: () =>
+      guarded(async () => {
+        stopNaming(() => true);
         try {
           // Conversas, Configurações e todas as Chaves, também as de Provedor que saiu do registro.
           await Promise.all([
@@ -396,8 +420,7 @@ export const createToi = async (deps: ToiDeps): Promise<Toi> => {
           connections.clear();
           tools = null;
         }
-      });
-    },
+      }),
 
     async attachment(id) {
       const [blob] = await deps.store.readAttachments([id]);
