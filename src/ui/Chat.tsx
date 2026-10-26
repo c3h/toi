@@ -273,8 +273,10 @@ const Reply = ({
   );
 };
 
-const nearBottom = (element: HTMLElement): boolean =>
-  element.scrollHeight - element.scrollTop - element.clientHeight < 64;
+const toEnd = (element: HTMLElement): number =>
+  element.scrollHeight - element.scrollTop - element.clientHeight;
+
+const nearBottom = (element: HTMLElement): boolean => toEnd(element) < 64;
 
 export const Chat = ({
   ref,
@@ -304,7 +306,7 @@ export const Chat = ({
   const picker = useRef<HTMLInputElement>(null);
   const scroller = useRef<HTMLDivElement>(null);
   const following = useRef(true);
-  // O `scrollTop` do último evento de rolagem: conteúdo que cresce nunca o diminui, só a pessoa.
+  // Onde a lista estava por último: no evento de rolagem ou quando o toi rolou até o fim.
   const lastTop = useRef(0);
   // "Ir para o fim" em curso: segue até o fim, mesmo que ele ande no caminho.
   const heading = useRef(false);
@@ -315,33 +317,44 @@ export const Chat = ({
 
   useImperativeHandle(ref, () => ({ focus: () => input.current?.focus() }), []);
 
+  // Acompanhando, quem segura o fim é o toi: a ancoragem de rolagem do navegador, que sobe a
+  // lista quando algo acima do que está à vista encolhe, fica desligada. Assim a lista só sobe
+  // sem parar no fim quando a pessoa rola.
+  const follow = (element: HTMLDivElement, value: boolean) => {
+    following.current = value;
+    element.style.overflowAnchor = value ? 'none' : '';
+    setAtBottom(value);
+  };
+
   // Conversa que abre começa no fim, onde quer que a anterior tenha ficado: a lista vazia
-  // entre uma e outra nem sempre rola (já no topo) para o `onScroll` dizer isso.
+  // entre uma e outra nem sempre rola (já no topo) para o `onScroll` dizer isso. O `lastTop`
+  // da anterior não vale para a nova: a lista vazia que volta ao topo não é a pessoa subindo.
   useLayoutEffect(() => {
-    following.current = true;
     heading.current = false;
-    setAtBottom(true);
+    lastTop.current = 0;
+    follow(scroller.current!, true);
   }, [conversationId]);
 
-  // Acompanha o fim só se a pessoa já estava lá. A lista cresce com Mensagens
-  // novas e com a revelação, que avança entre uma mudança de Mensagens e outra.
-  // Com "ir para o fim" em curso, quem acompanha é o `scrollend`, sem cortar a
-  // rolagem suave.
+  // Acompanha o fim só se a pessoa já estava lá. A lista cresce com Mensagens novas e com a
+  // revelação, que avança entre uma mudança de Mensagens e outra; a área visível encolhe com
+  // o composer que cresce e com avisos. Com "ir para o fim" em curso, quem acompanha é o
+  // `scrollend`, sem cortar a rolagem suave.
   const followList = useCallback((content: HTMLDivElement) => {
+    const element = content.parentElement!;
     const observer = new ResizeObserver(() => {
-      const element = scroller.current;
-      if (element && following.current && !heading.current) {
-        element.scrollTop = element.scrollHeight;
-      }
+      if (!following.current || heading.current) return;
+      element.scrollTop = element.scrollHeight;
+      lastTop.current = element.scrollTop;
     });
     observer.observe(content);
+    observer.observe(element);
     return () => observer.disconnect();
   }, []);
 
   // Mensagem que aparece pela primeira vez no caminho troca a altura reservada pela real
   // (`content-visibility`) e o fim anda; cada `scrollend` antes dele rola de novo.
   const scrollToEnd = (element: HTMLDivElement) => {
-    following.current = true;
+    follow(element, true);
     heading.current = true;
     element.scrollTo({ top: element.scrollHeight, behavior: 'smooth' });
   };
@@ -373,7 +386,7 @@ export const Chat = ({
     if (!sendable) return;
     const text = draft.trim();
 
-    following.current = true;
+    follow(scroller.current!, true);
     setDraft('');
     const taken = attachments.take();
     const accepted = await onSend(text, taken);
@@ -411,13 +424,13 @@ export const Chat = ({
         className="relative min-h-0 flex-1 overflow-y-auto px-4 pt-8 pb-6 sm:px-8"
         onScroll={(event) => {
           const element = event.currentTarget;
-          // Quem acompanha o fim só o larga rolando para cima. O evento pode chegar com a
-          // lista já crescida e o ResizeObserver ainda por rolar (a Mensagem nova que troca a
-          // altura reservada pela real): medir só a distância ao fim largaria sozinho.
-          following.current =
-            nearBottom(element) || (following.current && element.scrollTop >= lastTop.current);
+          // Só a pessoa larga o fim, e rolando para cima, por pouco que seja: a lista que
+          // cresce não muda o `scrollTop`, e a que encolhe só o traz até o novo fim. O evento
+          // pode chegar com a lista já crescida e o ResizeObserver ainda por rolar (a Mensagem
+          // nova que troca a altura reservada pela real): a distância ao fim sozinha largaria.
+          const up = element.scrollTop < lastTop.current;
           lastTop.current = element.scrollTop;
-          setAtBottom(following.current);
+          follow(element, up ? toEnd(element) < 1 : following.current || nearBottom(element));
         }}
         onScrollEnd={(event) => {
           if (!heading.current) return;
