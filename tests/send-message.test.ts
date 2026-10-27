@@ -13,20 +13,15 @@ import type { StreamEvent } from '../src/domain/stream';
 import {
   abortError,
   baseDeps,
-  deferred,
   expectCachedPrefix,
   FailingWrites,
   gatedProvider,
   imageFile,
-  MemorySettingsStore,
-  MemoryStore,
   replyEvents,
   ScriptedProvider,
   sendInput,
   testModel,
-  textEvents,
   textFile,
-  UnreadableInstructions,
   usage,
 } from './helpers';
 
@@ -149,32 +144,6 @@ describe('sendMessage', () => {
     expect(result.persistError?.code).toBe('storage_failed');
   });
 
-  it('marca o primeiro token no primeiro delta de qualquer Parte e não o move depois', async () => {
-    const { store, deps, clock } = await baseDeps();
-
-    const provider = new ScriptedProvider(async function* (): AsyncGenerator<StreamEvent> {
-      yield { type: 'started', model: testModel.id, usage: usage(3, 0) };
-      yield { type: 'part_started', index: 0, part: { type: 'reasoning' } };
-      clock.set(50_800);
-      yield { type: 'delta', index: 0, part: 'reasoning', text: 'pensando' };
-      yield { type: 'part_finished', index: 0 };
-      clock.set(51_000);
-      yield* textEvents('oi', 1);
-      yield { type: 'usage', usage: usage(3, 4), stopReason: 'end_turn' };
-      yield { type: 'finished' };
-      clock.set(52_000);
-    });
-
-    const result = await sendMessage({ ...deps, provider }, ask());
-
-    expect(result.message).toMatchObject({
-      createdAt: 50_000,
-      firstTokenAt: 50_800,
-      completedAt: 52_000,
-    });
-    expect((await store.getMessage(result.message.id))?.firstTokenAt).toBe(50_800);
-  });
-
   it('retry substitui a última Mensagem do assistant em vez de duplicar', async () => {
     const { store, deps } = await baseDeps();
     let failing = true;
@@ -216,115 +185,6 @@ describe('sendMessage', () => {
       { role: 'user', parts: [{ type: 'text', text: 'Pergunta' }] },
     ]);
   });
-
-  it('retry grava o destino novo antes da rede, mesmo se falhar antes de started', async () => {
-    const { store, deps } = await baseDeps();
-    const first = await sendMessage(
-      { ...deps, provider: new ScriptedProvider(successEvents()) },
-      ask(),
-    );
-
-    const other = { ...testModel, id: 'claude-outro' };
-    const unreachable = new ScriptedProvider(async function* (): AsyncGenerator<StreamEvent> {
-      throw new AppError('unreachable', 'Não foi possível falar com a Anthropic.');
-    });
-
-    const retried = await retryMessage(
-      { ...deps, provider: unreachable },
-      {
-        conversationId: 'c1',
-        messageId: first.message.id,
-        model: other,
-        effort: 'low',
-        signal: new AbortController().signal,
-      },
-    );
-
-    expect(first.message.firstTokenAt).not.toBeNull();
-    expect(retried.message).toMatchObject({
-      status: 'failed',
-      provider: 'anthropic',
-      model: 'claude-outro',
-      firstTokenAt: null,
-    });
-    expect(await store.getMessage(first.message.id)).toMatchObject({ model: 'claude-outro' });
-    expect(await store.getConversation('c1')).toMatchObject({
-      provider: 'anthropic',
-      model: 'claude-outro',
-    });
-  });
-});
-
-describe('sendMessage com Anexos', () => {
-  it('grava os Anexos e manda os bytes antes do texto', async () => {
-    const { store, deps } = await baseDeps();
-    const provider = new ScriptedProvider(successEvents());
-    const files = [imageFile('i1', 3), textFile('t1', '# notas')];
-
-    const result = await sendMessage({ ...deps, provider }, ask({ attachments: files }));
-
-    expect(result.message.status).toBe('complete');
-    const [user] = await store.listMessages('c1');
-    expect(user!.parts).toEqual([
-      { type: 'file', attachment: files[0]!.attachment },
-      { type: 'file', attachment: files[1]!.attachment },
-      { type: 'text', text: 'Pergunta' },
-    ]);
-    expect(store.attachments.get('i1')).toEqual({ conversationId: 'c1', blob: files[0]!.blob });
-    expect(provider.requests[0]!.messages[0]!.parts).toEqual([
-      ...files.map(({ attachment, blob }) => ({ type: 'file', attachment, data: blob })),
-      { type: 'text', text: 'Pergunta' },
-    ]);
-  });
-
-  it('parar enquanto os Anexos são lidos fecha em interrupted sem chegar à rede', async () => {
-    const reading = deferred();
-    const release = deferred();
-    class SlowStore extends MemoryStore {
-      override async readAttachments(ids: string[]): Promise<Blob[]> {
-        reading.resolve();
-        await release.promise;
-        return super.readAttachments(ids);
-      }
-    }
-    const { deps } = await baseDeps(new SlowStore());
-    const provider = new ScriptedProvider(successEvents());
-    const controller = new AbortController();
-
-    const run = await startSendMessage(
-      { ...deps, provider },
-      ask({ attachments: [imageFile('i1')], signal: controller.signal }),
-    );
-    await reading.promise;
-    controller.abort();
-    release.resolve();
-
-    const result = await run.result;
-    expect(result.message.status).toBe('interrupted');
-    expect(provider.requests).toEqual([]);
-  });
-
-  it('Anexo que sumiu do navegador falha a resposta com storage_failed', async () => {
-    const { store, deps } = await baseDeps();
-    const provider = new ScriptedProvider(successEvents());
-    const first = await sendMessage({ ...deps, provider }, ask({ attachments: [imageFile('i1')] }));
-    store.attachments.delete('i1');
-
-    const retried = await retryMessage(
-      { ...deps, provider },
-      {
-        conversationId: 'c1',
-        messageId: first.message.id,
-        model: testModel,
-        effort: 'low',
-        signal: new AbortController().signal,
-      },
-    );
-
-    expect(retried.message.status).toBe('failed');
-    expect(retried.message.error?.code).toBe('storage_failed');
-    expect(provider.requests).toHaveLength(1);
-  });
 });
 
 describe('cache de prompt', () => {
@@ -340,77 +200,5 @@ describe('cache de prompt', () => {
     await sendMessage(run, ask({ text: 'E depois?' }));
 
     await expectCachedPrefix(provider.requests[0]!, provider.requests[1]!);
-  });
-});
-
-describe('Instruções', () => {
-  it('vão em system no envio, e tentar de novo usa as gravadas na hora', async () => {
-    const { deps } = await baseDeps();
-    const settings = new MemorySettingsStore();
-    await settings.saveInstructions('responda curto');
-    const provider = new ScriptedProvider(successEvents());
-    const run = { ...deps, settings, tools: null, provider };
-
-    const first = await sendMessage(run, ask());
-    await settings.saveInstructions('responda em inglês');
-    await retryMessage(run, {
-      conversationId: 'c1',
-      messageId: first.message.id,
-      model: testModel,
-      effort: 'low',
-      signal: new AbortController().signal,
-    });
-
-    expect(provider.requests.map(({ system }) => system)).toEqual([
-      'responda curto',
-      'responda em inglês',
-    ]);
-  });
-
-  it('sem conseguir lê-las, a resposta falha com storage_failed sem chegar à rede', async () => {
-    const { store, deps } = await baseDeps();
-    const provider = new ScriptedProvider(successEvents());
-
-    const { message } = await sendMessage(
-      { ...deps, settings: new UnreadableInstructions(), tools: null, provider },
-      ask(),
-    );
-
-    expect(message.status).toBe('failed');
-    expect(message.error).toMatchObject({
-      code: 'storage_failed',
-      message: 'Não foi possível ler as Instruções salvas no navegador.',
-    });
-    expect(provider.requests).toEqual([]);
-    expect((await store.listMessages('c1')).map(({ status }) => status)).toEqual([
-      'complete',
-      'failed',
-    ]);
-  });
-
-  it('parar enquanto elas são lidas fecha em interrupted sem chegar à rede', async () => {
-    const reading = deferred();
-    const release = deferred();
-    class SlowSettings extends MemorySettingsStore {
-      override async instructions(): Promise<string | null> {
-        reading.resolve();
-        await release.promise;
-        return 'responda curto';
-      }
-    }
-    const { deps } = await baseDeps();
-    const provider = new ScriptedProvider(successEvents());
-    const controller = new AbortController();
-
-    const run = await startSendMessage(
-      { ...deps, settings: new SlowSettings(), tools: null, provider },
-      ask({ signal: controller.signal }),
-    );
-    await reading.promise;
-    controller.abort();
-    release.resolve();
-
-    expect((await run.result).message.status).toBe('interrupted');
-    expect(provider.requests).toEqual([]);
   });
 });

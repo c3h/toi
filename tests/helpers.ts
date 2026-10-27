@@ -1,7 +1,7 @@
 import { expect } from 'vitest';
 import type { Attachment, AttachmentUpload } from '../src/domain/attachment';
 import type { Conversation } from '../src/domain/conversation';
-import { appError, missingAttachmentError } from '../src/domain/error';
+import { missingAttachmentError } from '../src/domain/error';
 import type { Message, Part } from '../src/domain/message';
 import type { Effort, Model, ModelPicks, ModelRef } from '../src/domain/model';
 import type { CredentialOwner, ProviderId } from '../src/domain/ids';
@@ -12,7 +12,6 @@ import type { FlowDeps } from '../src/app/flow';
 import type { RunDeps, SendOptions } from '../src/app/send-message';
 import { toAnthropicPayload } from '../src/adapters/protocols/anthropic-messages/request';
 import { anthropicInfo } from '../src/adapters/providers/anthropic/info';
-import { anthropicFamily } from '../src/adapters/providers/anthropic/models';
 import type { Clock } from '../src/ports/clock';
 import type {
   ConversationStore,
@@ -35,15 +34,6 @@ export const testModel: Model = {
   createdAt: '2026-01-01T00:00:00Z',
   reasoningOff: true,
 };
-
-/** Um Modelo da Anthropic com a família que o Provedor daria ao id. */
-export const makeModel = (id: string, overrides: Partial<Model> = {}): Model => ({
-  ...testModel,
-  id,
-  displayName: id,
-  family: anthropicFamily(id),
-  ...overrides,
-});
 
 /** Os Provedores de `createToi`: um só, criado por `create` a cada Chave. */
 export const providersOf = (create: (apiKey: string) => ChatProvider): ProviderAdapter[] => [
@@ -265,18 +255,13 @@ export class MemoryStore implements ConversationStore {
   }
 }
 
-/** Armazenamento que enche: com `failing`, gravar uma Mensagem e apagar falham; `startTurn`, não. */
+/** Armazenamento que enche: com `failing`, gravar uma Mensagem falha; `startTurn`, não. */
 export class FailingWrites extends MemoryStore {
   failing = false;
 
   override async putMessage(message: Message): Promise<void> {
     if (this.failing) throw new Error('QuotaExceededError');
     await super.putMessage(message);
-  }
-
-  override async deleteConversation(id: string): Promise<void> {
-    if (this.failing) throw new Error('UnknownError');
-    await super.deleteConversation(id);
   }
 }
 
@@ -387,40 +372,23 @@ export class MemorySettingsStore implements SettingsStore {
   }
 }
 
-/** Configurações cujas Instruções não podem ser lidas, como com o IndexedDB bloqueado. */
-export class UnreadableInstructions extends MemorySettingsStore {
-  override async instructions(): Promise<string | null> {
-    throw new DOMException('bloqueado', 'UnknownError');
-  }
-}
-
-export const fixedClock = (start = 10_000): Clock & { set(value: number): void } => {
-  let current = start;
-  return {
-    now: () => current,
-    set: (value) => {
-      current = value;
-    },
-  };
-};
+export const fixedClock = (now: number): Clock => ({ now: () => now });
 
 type Script = StreamEvent[] | ((signal: AbortSignal) => AsyncIterable<StreamEvent>);
 
 /** Responde cada pedido com um script; `{ rounds }` dá um por pedido, como as Rodadas de uma resposta. */
 export class ScriptedProvider implements ChatProvider {
   readonly requests: ChatRequest[] = [];
-  readonly models: Model[];
   /** Script único responde todo pedido; Rodadas, uma por pedido, e pedido fora delas falha. */
   readonly #scriptFor: (request: number) => Script | undefined;
 
-  constructor(script: Script | { rounds: Script[] }, models: Model[] = [testModel]) {
+  constructor(script: Script | { rounds: Script[] }) {
     this.#scriptFor = 'rounds' in script ? (request) => script.rounds[request] : () => script;
-    this.models = models;
   }
 
   async listModels(signal: AbortSignal): Promise<Model[]> {
     signal.throwIfAborted();
-    return this.models;
+    return [testModel];
   }
 
   async *stream(request: ChatRequest, signal: AbortSignal): AsyncGenerator<StreamEvent> {
@@ -452,18 +420,11 @@ export const expectCachedPrefix = async (before: ChatRequest, after: ChatRequest
   expect(later.length).toBeGreaterThan(earlier.length);
 };
 
-/** Recusa a Chave ao listar Modelos. */
-export class FailingProvider extends ScriptedProvider {
-  override async listModels(): Promise<Model[]> {
-    throw appError('invalid_credential');
-  }
-}
-
 /** Os Eventos de um bloco de texto, como o adaptador os emite. */
-export const textEvents = (text: string, index = 0): StreamEvent[] => [
-  { type: 'part_started', index, part: { type: 'text' } },
-  { type: 'delta', index, part: 'text', text },
-  { type: 'part_finished', index },
+export const textEvents = (text: string): StreamEvent[] => [
+  { type: 'part_started', index: 0, part: { type: 'text' } },
+  { type: 'delta', index: 0, part: 'text', text },
+  { type: 'part_finished', index: 0 },
 ];
 
 /** Os Eventos de uma chamada de Ferramenta, com o input inteiro num delta. */
@@ -485,7 +446,7 @@ export const round = (body: StreamEvent[], stopReason: StopReason, output = 5): 
 export const replyEvents = (text = 'Olá'): StreamEvent[] => round(textEvents(text), 'end_turn');
 
 /** Uma Promise e quem a resolve, para o teste marcar um ponto do Fluxo. */
-export const deferred = (): { promise: Promise<void>; resolve: () => void } => {
+const deferred = (): { promise: Promise<void>; resolve: () => void } => {
   let resolve: () => void = () => undefined;
   const promise = new Promise<void>((done) => {
     resolve = done;
@@ -494,7 +455,7 @@ export const deferred = (): { promise: Promise<void>; resolve: () => void } => {
 };
 
 /** Pendura até o `signal` abortar e então rejeita como o `fetch`. */
-export const untilAborted = (signal: AbortSignal): Promise<never> =>
+const untilAborted = (signal: AbortSignal): Promise<never> =>
   new Promise((_, reject) => {
     if (signal.aborted) {
       reject(abortError());
@@ -538,22 +499,20 @@ interface BuiltDeps {
   store: MemoryStore;
   /** Sem Provedor, que cada teste dá, e sem Serviço, até o teste dar um. */
   deps: Omit<RunDeps, 'provider'> & Pick<FlowDeps, 'locks'>;
-  clock: ReturnType<typeof fixedClock>;
 }
 
-/** As dependências de um envio sem Provedor, com locks que simulam outra aba; não grava nada. */
-export const flowDeps = (store = new MemoryStore()): BuiltDeps => {
-  const clock = fixedClock(50_000);
+/** As dependências de um envio sem Provedor, com locks que simulam outra aba e a Conversa `c1` gravada. */
+export const baseDeps = async (store = new MemoryStore()): Promise<BuiltDeps> => {
+  await store.putConversation(makeConversation('c1'));
   let next = 0;
 
   return {
     store,
-    clock,
     deps: {
       store,
       settings: new MemorySettingsStore(),
       tools: null,
-      clock,
+      clock: fixedClock(50_000),
       estimator: { estimate: () => 1, estimateAttachment: () => 1 },
       newId: () => `id-${(next += 1)}`,
       flushIntervalMs: 60_000,
@@ -561,13 +520,6 @@ export const flowDeps = (store = new MemoryStore()): BuiltDeps => {
       locale: 'pt-BR',
     },
   };
-};
-
-/** `flowDeps` com a Conversa `c1` gravada. */
-export const baseDeps = async (store = new MemoryStore()): Promise<BuiltDeps> => {
-  const built = flowDeps(store);
-  await store.putConversation(makeConversation('c1'));
-  return built;
 };
 
 export const jsonResponse = (
@@ -591,13 +543,10 @@ export const usage = (input: number, output: number) => ({
   outputTokens: output,
 });
 
-type Answer<T> = T | Error | ((signal: AbortSignal) => Promise<T>);
+type Answer<T> = T | ((signal: AbortSignal) => Promise<T>);
 
-const answer = async <T>(value: Answer<T>, signal: AbortSignal): Promise<T> => {
-  if (typeof value === 'function') return (value as (signal: AbortSignal) => Promise<T>)(signal);
-  if (value instanceof Error) throw value;
-  return value;
-};
+const answer = async <T>(value: Answer<T>, signal: AbortSignal): Promise<T> =>
+  typeof value === 'function' ? (value as (signal: AbortSignal) => Promise<T>)(signal) : value;
 
 /** Um Serviço de Ferramentas que responde o que o teste mandou e guarda os pedidos. */
 export class FakeWebTools implements WebTools {
@@ -605,7 +554,6 @@ export class FakeWebTools implements WebTools {
   readonly fetches: string[][] = [];
   searchAnswer: Answer<SearchOutcome> = { hits: [] };
   fetchAnswer: Answer<FetchOutcome> = { pages: [], failures: [] };
-  verifyAnswer: Answer<void> = undefined;
 
   async search(query: { text: string; language: string }, signal: AbortSignal): Promise<SearchOutcome> {
     this.searches.push(query);
@@ -617,9 +565,7 @@ export class FakeWebTools implements WebTools {
     return answer(this.fetchAnswer, signal);
   }
 
-  async verify(signal: AbortSignal): Promise<void> {
-    return answer(this.verifyAnswer, signal);
-  }
+  async verify(): Promise<void> {}
 }
 
 export const hit = (url: string, title = url) => ({ title, url, snippet: `sobre ${title}`, date: null });

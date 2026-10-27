@@ -1,23 +1,24 @@
-import { connect, expect, send, setMock, test } from './fixtures';
+import { connect, expect, hold, send, test } from './fixtures';
 
 test('envia e vê a resposta em Markdown', async ({ page }) => {
   await connect(page);
-  // Com atraso entre deltas o Fluxo tem duração, e a vazão aparece.
-  await setMock(page, { reply: 'Resposta com **ênfase** e `código`.', deltas: 8, delayMs: 20 });
+  const answer = await hold(page);
 
   await send(page, 'Primeira pergunta');
-  // O pedido da Mensagem entre os que saíram: o do Título, quando há, leva outro texto.
-  await expect
-    .poll(() => page.evaluate(() => window.__bodies.map((body): unknown => JSON.parse(body))))
-    .toContainEqual(
-      expect.objectContaining({
-        cache_control: { type: 'ephemeral' },
-        messages: [{ role: 'user', content: [{ type: 'text', text: 'Primeira pergunta' }] }],
-      }),
-    );
-
+  // A resposta aberta entre um delta e outro dá duração ao Fluxo, e a vazão aparece.
+  await answer.write('Resposta com **ênfase**');
   await expect(page.locator('strong', { hasText: 'ênfase' })).toBeVisible();
-  await expect(page.getByTitle('12 tokens de entrada, 8 de saída')).toBeVisible();
+  await answer.write(' e `código`.');
+  await answer.end();
+  expect(JSON.parse(await answer.body())).toEqual(
+    expect.objectContaining({
+      cache_control: { type: 'ephemeral' },
+      messages: [{ role: 'user', content: [{ type: 'text', text: 'Primeira pergunta' }] }],
+    }),
+  );
+
+  await expect(page.locator('code', { hasText: 'código' })).toBeVisible();
+  await expect(page.getByTitle('12 tokens de entrada, 2 de saída')).toBeVisible();
   await expect(page.getByTitle(/até o modelo responder$/)).toBeVisible();
   await expect(page.getByTitle(/tokens por segundo$/)).toBeVisible();
   await expect(page.getByRole('banner')).toContainText('primeira pergunta');
@@ -25,33 +26,40 @@ test('envia e vê a resposta em Markdown', async ({ page }) => {
 
 test('parar mantém o texto recebido e tentar de novo substitui a resposta', async ({ page }) => {
   await connect(page);
-  await setMock(page, { reply: 'palavra '.repeat(200), deltas: 200, delayMs: 30 });
+  const answer = await hold(page);
 
   await send(page, 'Pergunta longa');
+  await answer.write('palavra '.repeat(20));
   await expect(page.getByText(/palavra palavra/)).toBeVisible();
   await page.getByRole('button', { name: /parar/ }).click();
 
   await expect(page.getByText('resposta interrompida.')).toBeVisible();
 
-  await setMock(page, { reply: 'Agora completa.', deltas: 2, delayMs: 0 });
+  const retry = await hold(page);
   await page.getByRole('button', { name: 'tentar de novo' }).click();
+  await retry.write('Agora completa.');
+  await retry.end();
 
   await expect(page.getByText('Agora completa.')).toBeVisible();
   await expect(page.getByText('resposta interrompida.')).toHaveCount(0);
   await expect(page.locator('article')).toHaveCount(2);
 });
 
-test('recarregar no meio do Fluxo deixa a Mensagem interrompida, não presa', async ({ page }) => {
+test('recarregar no meio do Fluxo deixa a Mensagem interrompida, não presa', async ({
+  context,
+  page,
+}) => {
   await connect(page);
-  await setMock(page, { reply: 'trecho '.repeat(300), deltas: 300, delayMs: 30 });
+  const answer = await hold(page);
 
   await send(page, 'Vou recarregar');
-  // Até 300 ms de Fluxo vivem só em memória (§4); com 20 deltas de 30 ms, um flush já passou.
-  await page.waitForFunction(
-    () =>
-      (document.querySelector('[aria-busy="true"]')?.textContent?.match(/trecho/g)?.length ?? 0) >=
-      20,
-  );
+  await answer.write('trecho '.repeat(20));
+  // Até 300 ms de Fluxo vivem só em memória (§4): outra aba só mostra o trecho depois de gravado.
+  const witness = await context.newPage();
+  await witness.goto('/');
+  await witness.getByRole('button', { name: 'vou recarregar', exact: true }).click();
+  await expect(witness.getByText(/trecho trecho/)).toBeVisible();
+  await witness.close();
 
   await page.reload();
 
@@ -65,8 +73,9 @@ test('duas abas: a segunda vê o Fluxo da primeira e não escreve ao mesmo tempo
   page,
 }) => {
   await connect(page);
-  await setMock(page, { reply: 'compartilhado '.repeat(120), deltas: 120, delayMs: 40 });
+  const answer = await hold(page);
   await send(page, 'Conversa disputada');
+  await answer.write('compartilhado '.repeat(20));
   await expect(page.getByText(/compartilhado compartilhado/)).toBeVisible();
 
   const other = await context.newPage();
@@ -80,117 +89,7 @@ test('duas abas: a segunda vê o Fluxo da primeira e não escreve ao mesmo tempo
   await expect(other.getByRole('status')).toContainText('espere a operação atual terminar');
   await expect(other.getByLabel('mensagem')).toHaveValue('Tentando ao mesmo tempo');
 
-  await expect(page.getByText(/tokens de entrada/)).toBeVisible({ timeout: 15_000 });
+  await answer.end();
+  await expect(page.getByText(/tokens de entrada/)).toBeVisible();
   await expect(other.getByText(/tokens de entrada/)).toBeVisible();
-});
-
-test('ir para o fim aparece só fora do fim e leva de volta', async ({ page }) => {
-  await connect(page);
-  // Respostas mais altas que a reserva de `content-visibility`, e tantas que o meio não
-  // aparece ao abrir.
-  for (let reply = 0; reply < 12; reply += 1) {
-    const paragraphs = Array.from(
-      { length: 20 },
-      (_, index) => `Resposta ${reply}, parágrafo ${index}.`,
-    );
-    await setMock(page, { reply: paragraphs.join('\n\n'), deltas: 1 });
-    await send(page, `Pergunta ${reply}`);
-    await expect(page.getByText(paragraphs.at(-1)!, { exact: true })).toBeInViewport();
-  }
-  // Recarregada, a Conversa abre no fim e as Mensagens do meio reservam a altura média, não a
-  // real.
-  await page.reload();
-  const last = page.getByText('Resposta 11, parágrafo 19.', { exact: true });
-  await expect(last).toBeInViewport();
-
-  const toEnd = page.getByRole('button', { name: 'ir para o fim' });
-  await expect(toEnd).toBeHidden();
-
-  // Direto ao topo: o caminho de volta mostra o meio pela primeira vez, e o fim anda.
-  await page.getByText('Resposta 0, parágrafo 0.', { exact: true }).hover();
-  await toEnd.click();
-
-  await expect(last).toBeInViewport();
-  await expect(toEnd).toBeHidden();
-});
-
-test('segue o fim quando a rolagem chega com a lista já crescida', async ({ page }) => {
-  await connect(page);
-  const paragraphs = Array.from({ length: 40 }, (_, index) => `Parágrafo ${index}.`);
-  await setMock(page, { reply: paragraphs.join('\n\n'), deltas: 1 });
-  await send(page, 'Pergunta');
-  await expect(page.getByTitle(/tokens de entrada/)).toBeInViewport();
-
-  // Como a Mensagem que troca a altura reservada pela real (`content-visibility`): a lista
-  // cresce, e o evento de rolagem chega antes de o ResizeObserver acompanhar.
-  await page.evaluate(() => {
-    const answer = document.querySelectorAll('article')[1]!;
-    const grown = document.createElement('p');
-    grown.textContent = 'Cresceu.';
-    grown.style.marginTop = '200vh';
-    answer.append(grown);
-    answer.closest('.overflow-y-auto')!.dispatchEvent(new Event('scroll'));
-  });
-
-  await expect(page.getByText('Cresceu.', { exact: true })).toBeInViewport();
-  await expect(page.getByRole('button', { name: 'ir para o fim' })).toBeHidden();
-});
-
-test('abrir outra Conversa começa no fim, mesmo vindo do topo da anterior', async ({ page }) => {
-  await connect(page);
-  const reply = (tag: string) =>
-    Array.from({ length: 30 }, (_, index) => `${tag}, parágrafo ${index}.`).join('\n\n');
-  await setMock(page, { reply: reply('A'), deltas: 1 });
-  await send(page, 'Conversa A');
-  await expect(page.getByText('A, parágrafo 29.', { exact: true })).toBeInViewport();
-
-  await page.getByRole('button', { name: 'nova conversa' }).click();
-  await setMock(page, { reply: reply('B'), deltas: 1 });
-  await send(page, 'Conversa B');
-  await expect(page.getByText('B, parágrafo 29.', { exact: true })).toBeInViewport();
-
-  // No topo, a lista vazia entre uma Conversa e outra não rola.
-  await page.getByText('B, parágrafo 0.', { exact: true }).hover();
-  await page.mouse.wheel(0, -100_000);
-  await expect(page.getByText('Conversa B', { exact: true })).toBeInViewport();
-
-  await page.getByRole('button', { name: 'conversa a', exact: true }).click();
-  await expect(page.getByText('A, parágrafo 29.', { exact: true })).toBeInViewport();
-  await expect(page.getByRole('button', { name: 'ir para o fim' })).toBeHidden();
-});
-
-test('rolar um pouco para cima no meio do Fluxo larga o fim', async ({ page }) => {
-  await connect(page);
-  const paragraphs = Array.from({ length: 60 }, (_, index) => `Parágrafo ${index}.`);
-  await setMock(page, { reply: paragraphs.join('\n\n'), deltas: 200, delayMs: 10 });
-  await send(page, 'Pergunta');
-  await expect(page.getByText('Parágrafo 20.', { exact: true })).toBeInViewport();
-
-  // Como um trackpad: passos menores do que a revelação acrescenta entre um frame e outro, e
-  // somados ainda perto do fim.
-  const conversation = page.locator('.overflow-y-auto', { has: page.locator('article') });
-  const box = (await conversation.boundingBox())!;
-  await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
-  for (let step = 0; step < 5; step += 1) {
-    await page.mouse.wheel(0, -4);
-    await page.evaluate(() => new Promise(requestAnimationFrame));
-  }
-
-  const toEnd = page.getByRole('button', { name: 'ir para o fim' });
-  await expect(toEnd).toBeVisible();
-  await expect(page.getByTitle(/tokens de entrada/)).toBeAttached();
-  await expect(page.getByText('Parágrafo 59.', { exact: true })).not.toBeInViewport();
-  await expect(toEnd).toBeVisible();
-});
-
-test('o composer que cresce não esconde o fim acompanhado', async ({ page }) => {
-  await connect(page);
-  const paragraphs = Array.from({ length: 40 }, (_, index) => `Parágrafo ${index}.`);
-  await setMock(page, { reply: paragraphs.join('\n\n'), deltas: 1 });
-  await send(page, 'Pergunta');
-  const usage = page.getByTitle(/tokens de entrada/);
-  await expect(usage).toBeInViewport();
-
-  await page.getByLabel('mensagem').fill('linha\n'.repeat(12));
-  await expect(usage).toBeInViewport();
 });

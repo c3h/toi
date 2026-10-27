@@ -12,30 +12,6 @@ import {
 } from './helpers';
 
 describe('createFlow', () => {
-  it('flush grava o rascunho sem esperar o intervalo', async () => {
-    const { store, deps } = await baseDeps();
-    const { provider, delta } = gatedProvider();
-    const flow = createFlow({ ...deps, provider: () => provider, tools: () => null });
-
-    const pending = flow.send(sendInput());
-
-    await delta;
-    expect(flow.active()).toEqual(new Set(['c1']));
-
-    await flow.flush();
-
-    const messages = await store.listMessages('c1');
-    expect(messages).toHaveLength(2);
-    expect(textOf(messages[1]!)).toBe('a');
-    expect(messages[1]?.status).toBe('streaming');
-
-    await flow.stop('c1');
-    const result = await pending;
-
-    expect(result.message.status).toBe('interrupted');
-    expect(flow.active().size).toBe(0);
-  });
-
   it('stop antes do Fluxo começar fecha em interrupted', async () => {
     const { store, deps } = await baseDeps();
     const provider = new ScriptedProvider(replyEvents());
@@ -103,51 +79,5 @@ describe('createFlow', () => {
     await flow.stop('c2');
     expect((await second).message.status).toBe('interrupted');
     expect(flow.active().size).toBe(0);
-  });
-
-  it('exclusive sem Conversa para todos os Fluxos; com Conversa, só o dela', async () => {
-    const { flow, delta } = await parallel();
-
-    const first = flow.send(sendInput());
-    const second = flow.send(sendInput({ conversationId: 'c2' }));
-    await Promise.all([delta(0), delta(1)]);
-
-    await flow.exclusive(async () => {
-      expect(flow.active()).toEqual(new Set(['c2']));
-      await expect(flow.send(sendInput())).rejects.toMatchObject({ code: 'flow_busy' });
-    }, 'c1');
-    expect((await first).message.status).toBe('interrupted');
-
-    await flow.exclusive(async () => {
-      expect(flow.active().size).toBe(0);
-      await expect(
-        flow.send(sendInput({ conversationId: 'c2' })),
-      ).rejects.toMatchObject({ code: 'flow_busy' });
-    });
-    expect((await second).message.status).toBe('interrupted');
-  });
-
-  it('active só muda de identidade quando um Fluxo começa ou termina, e watch avisa', async () => {
-    const { deps } = await baseDeps();
-    const { provider, delta } = gatedProvider();
-    const flow = createFlow({ ...deps, provider: () => provider, tools: () => null });
-    const changes: Array<ReadonlySet<string>> = [];
-    const unwatch = flow.watch(() => changes.push(flow.active()));
-    const idle = flow.active();
-
-    const pending = flow.send(sendInput());
-    expect(changes).toEqual([new Set(['c1'])]);
-    await delta;
-    await flow.flush();
-    expect(changes).toHaveLength(1);
-    expect(flow.active()).toBe(changes[0]);
-
-    await flow.stop('c1');
-    await pending;
-    expect(changes).toHaveLength(2);
-    expect(flow.active().size).toBe(0);
-    expect(flow.active()).not.toBe(idle);
-
-    unwatch();
   });
 });

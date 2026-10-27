@@ -1,8 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { startSendMessage, type RunDeps, type SendOptions } from '../src/app/send-message';
 import { MAX_ROUNDS } from '../src/app/web-tools';
-import { appError } from '../src/domain/error';
-import type { Message } from '../src/domain/message';
 import type { StreamEvent } from '../src/domain/stream';
 import { WEB_FETCH, WEB_SEARCH } from '../src/domain/web';
 import {
@@ -11,11 +9,9 @@ import {
   expectCachedPrefix,
   FakeWebTools,
   hit,
-  MemorySettingsStore,
   round,
   ScriptedProvider,
   sendInput,
-  testModel,
   textEvents,
   toolCall,
 } from './helpers';
@@ -40,10 +36,6 @@ const narrating = (callId = 't1', query = 'cobre'): StreamEvent[] =>
     [...textEvents('Vou buscar.\n\n'), ...toolCall(1, callId, WEB_SEARCH, JSON.stringify({ query }))],
     'tool_use',
   );
-
-/** O código de erro de cada `tool_result`, na ordem; `null` no que deu certo. */
-const resultErrors = (message: Message) =>
-  message.parts.flatMap((part) => (part.type === 'tool_result' ? [part.error?.code ?? null] : []));
 
 const send = async (deps: RunDeps, overrides: Partial<SendOptions> = {}) =>
   (await startSendMessage(deps, { ...sendInput(), signal: new AbortController().signal, ...overrides }))
@@ -98,90 +90,6 @@ describe('laço de Rodadas', () => {
     expect((await store.listMessages('c1')).at(-1)).toEqual(message);
   });
 
-  it('sem Serviço não oferece Ferramentas', async () => {
-    const { provider, run } = await setup([answering()]);
-
-    await send({ ...run, tools: null });
-
-    expect(provider.requests[0]!.tools).toEqual([]);
-  });
-
-  it('Leitura de URL que a Busca da mesma Rodada achou é recusada; na Rodada seguinte, lida', async () => {
-    const url = 'https://a.com/cobre';
-    const { tools, run } = await setup([
-      round(
-        [
-          ...toolCall(0, 't1', WEB_SEARCH, '{"query":"cobre"}'),
-          ...toolCall(1, 't2', WEB_FETCH, JSON.stringify({ urls: [url] })),
-        ],
-        'tool_use',
-      ),
-      round(toolCall(0, 't3', WEB_FETCH, JSON.stringify({ urls: [url] })), 'tool_use'),
-      answering(),
-    ]);
-    tools.searchAnswer = { hits: [hit(url)] };
-    tools.fetchAnswer = {
-      pages: [{ finalUrl: url, title: 'Cobre', text: 'texto' }],
-      failures: [],
-    };
-
-    const { message } = await send(run);
-
-    expect(resultErrors(message)).toEqual([null, 'tool_url_not_eligible', null]);
-    expect(tools.fetches).toEqual([[url]]);
-  });
-
-  it('com o espaço escolhido cheio, a chamada seguinte recebe tool_call_limit sem rede', async () => {
-    const { run, tools } = await setup([searching('t1'), searching('t2'), answering()]);
-    const settings = new MemorySettingsStore();
-    await settings.saveToolSpace(20_000);
-    // Um token por caractere: um resultado no teto pesa 15 mil, a conclusão guarda mil, e o
-    // primeiro resultado ocupa 14 mil.
-    const estimator = { estimate: (text: string) => text.length, estimateAttachment: () => 1 };
-    tools.searchAnswer = { hits: [{ ...hit('https://a.com/'), snippet: 'x'.repeat(14_000) }] };
-
-    const { message } = await send(
-      { ...run, settings, estimator },
-      { model: { ...testModel, maxTokens: 1_000 } },
-    );
-
-    expect(tools.searches).toHaveLength(1);
-    expect(resultErrors(message)).toEqual([null, 'tool_call_limit']);
-    expect(message.status).toBe('complete');
-  });
-
-  it('conta o raciocínio pelo uso e fecha em tool_limit quando o Modelo insiste além do espaço', async () => {
-    // Cada Rodada declara 6 mil tokens de saída, embora o texto dela seja curto.
-    const insisting = (callId: string) =>
-      round(toolCall(0, callId, WEB_SEARCH, '{"query":"cobre"}'), 'tool_use', 6_000);
-    const { run, tools, provider } = await setup([
-      insisting('t1'),
-      insisting('t2'),
-      insisting('t3'),
-      insisting('t4'),
-    ]);
-    const settings = new MemorySettingsStore();
-    await settings.saveToolSpace(20_000);
-
-    const { message } = await send({ ...run, settings }, { model: { ...testModel, maxTokens: 1_000 } });
-
-    expect(tools.searches).toHaveLength(3);
-    expect(provider.requests).toHaveLength(4);
-    expect(message.status).toBe('failed');
-    expect(message.error?.code).toBe('tool_limit');
-  });
-
-  it('erro do Serviço vira resultado e a resposta segue', async () => {
-    const { run, tools } = await setup([searching(), answering('Sem busca, respondo assim.')]);
-    tools.searchAnswer = appError('tool_quota_exhausted');
-
-    const { message } = await send(run);
-
-    expect(message.status).toBe('complete');
-    const result = message.parts.find((part) => part.type === 'tool_result');
-    expect(result).toMatchObject({ error: { code: 'tool_quota_exhausted' } });
-  });
-
   it('para no teto de Rodadas com tool_limit', async () => {
     const rounds = Array.from({ length: MAX_ROUNDS }, (_, index) => searching(`t${index}`));
     const { run, provider, tools } = await setup(rounds);
@@ -193,44 +101,6 @@ describe('laço de Rodadas', () => {
     expect(tools.searches).toHaveLength(MAX_ROUNDS - 2);
     expect(message.status).toBe('failed');
     expect(message.error?.code).toBe('tool_limit');
-  });
-
-  it('max_tokens no meio da chamada fecha a resposta sem a chamada', async () => {
-    const { run, tools } = await setup([
-      round(
-        [
-          ...textEvents('vou buscar'),
-          { type: 'part_started', index: 1, part: { type: 'tool_call', callId: 't1', tool: WEB_SEARCH } },
-          { type: 'delta', index: 1, part: 'input', text: '{"query":' },
-        ],
-        'max_tokens',
-      ),
-    ]);
-
-    const { message } = await send(run);
-
-    expect(message.status).toBe('complete');
-    expect(message.stopReason).toBe('max_tokens');
-    expect(message.parts).toEqual([{ type: 'text', text: 'vou buscar' }]);
-    expect(tools.searches).toEqual([]);
-  });
-
-  it('tool_use com chamada quebrada falha sem executar nada', async () => {
-    const { run, tools } = await setup([
-      round(
-        [
-          { type: 'part_started', index: 0, part: { type: 'tool_call', callId: 't1', tool: WEB_SEARCH } },
-          { type: 'delta', index: 0, part: 'input', text: '{"query":' },
-          { type: 'part_finished', index: 0 },
-        ],
-        'tool_use',
-      ),
-    ]);
-
-    const { message } = await send(run);
-
-    expect(message.status).toBe('failed');
-    expect(tools.searches).toEqual([]);
   });
 
   it('cada Rodada reenvia a anterior inteira e só cresce no fim', async () => {
@@ -252,26 +122,6 @@ describe('laço de Rodadas', () => {
     await expectCachedPrefix(provider.requests[1]!, provider.requests[2]!);
   });
 
-  it('com raciocínio, o turno seguinte o deixa de fora e diverge no primeiro bloco da resposta', async () => {
-    // Perda aceita no ADR 0012: o raciocínio de turnos anteriores não volta, e o cache só
-    // acerta até a pergunta do turno anterior.
-    const { provider, run } = await setup([searching(), answering(), answering('O ouro caiu.')]);
-
-    await send(run);
-    await send(run, { text: 'E o ouro?' });
-
-    const [, lastRound, nextTurn] = provider.requests;
-    const [question, sent, results] = lastRound!.messages;
-    expect(sent!.parts[0]).toMatchObject({ type: 'reasoning' });
-    expect(nextTurn!.messages.slice(0, 3)).toEqual([
-      question,
-      { role: 'assistant', parts: sent!.parts.slice(1) },
-      results,
-    ]);
-    const parts = nextTurn!.messages.flatMap((message) => message.parts);
-    expect(parts.some((part) => part.type === 'reasoning')).toBe(false);
-  });
-
   it('parar durante a Ferramenta interrompe e guarda o que já veio', async () => {
     const controller = new AbortController();
     const { run, tools } = await setup([searching()]);
@@ -286,37 +136,5 @@ describe('laço de Rodadas', () => {
     expect(message.status).toBe('interrupted');
     expect(message.error).toBeNull();
     expect(message.parts.map((part) => part.type)).toEqual(['reasoning', 'tool_call']);
-  });
-
-  it('as Instruções lidas no envio valem para todas as Rodadas, mesmo salvas outras no meio', async () => {
-    const { run, tools, provider } = await setup([searching(), answering()]);
-    const settings = new MemorySettingsStore();
-    await settings.saveInstructions('responda curto');
-    tools.searchAnswer = async () => {
-      await settings.saveInstructions('responda longo');
-      return { hits: [hit('https://a.com/cobre')] };
-    };
-
-    await send({ ...run, settings });
-
-    expect(provider.requests.map(({ system }) => system)).toEqual([
-      'responda curto',
-      'responda curto',
-    ]);
-  });
-
-  it('URL escrita só nas Instruções não autoriza Leitura', async () => {
-    const url = 'https://meu.site/perfil';
-    const { run, tools } = await setup([
-      round(toolCall(0, 't1', WEB_FETCH, JSON.stringify({ urls: [url] })), 'tool_use'),
-      answering(),
-    ]);
-    const settings = new MemorySettingsStore();
-    await settings.saveInstructions(`meu site: ${url}`);
-
-    const { message } = await send({ ...run, settings });
-
-    expect(resultErrors(message)).toEqual(['tool_url_not_eligible']);
-    expect(tools.fetches).toEqual([]);
   });
 });

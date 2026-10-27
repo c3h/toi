@@ -28,7 +28,9 @@ jobs:
           cache: npm
       - run: npm ci
       # Só o headless shell: Vitest browser e e2e rodam headless, e o Chromium completo não é usado.
-      - run: npx playwright install --with-deps --only-shell chromium
+      # Sem --with-deps: a imagem ubuntu-24.04 já traz as libs do Chrome, e o apt-get dele baixava
+      # fontes e xvfb inúteis de um mirror que às vezes trava o passo por minutos.
+      - run: npx playwright install --only-shell chromium
       - run: npm run check
       - name: Validar o pacote de publicação
         run: npx wrangler deploy --dry-run

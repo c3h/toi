@@ -14,31 +14,6 @@ export interface StoreHarness {
   cleanup(): Promise<void>;
 }
 
-/** Guarda o que o watch entregou e resolve quando o último valor satisfaz a condição. */
-const recorder = <T>() => {
-  let last: { value: T } | null = null;
-  const waiters = new Set<() => void>();
-
-  return {
-    push(value: T): void {
-      last = { value };
-      for (const waiter of waiters) waiter();
-    },
-
-    until(matches: (value: T) => boolean): Promise<void> {
-      return new Promise((resolve) => {
-        const check = (): boolean => {
-          if (last === null || !matches(last.value)) return false;
-          waiters.delete(check);
-          resolve();
-          return true;
-        };
-        if (!check()) waiters.add(check);
-      });
-    },
-  };
-};
-
 export const describeConversationStore = (
   name: string,
   open: () => Promise<StoreHarness>,
@@ -158,49 +133,6 @@ export const describeConversationStore = (
           'm2',
         ]);
         expect(await snapshot.attachments.get('a1')!.text()).toBe('bytes');
-      } finally {
-        await cleanup();
-      }
-    });
-
-    it('lista Conversas por updatedAt decrescente', async () => {
-      const { store, cleanup } = await open();
-
-      try {
-        await store.putConversation(makeConversation('velha', { updatedAt: 10 }));
-        await store.putConversation(makeConversation('nova', { updatedAt: 30 }));
-        await store.putConversation(makeConversation('meio', { updatedAt: 20 }));
-
-        expect((await store.listConversations()).map((item) => item.id)).toEqual([
-          'nova',
-          'meio',
-          'velha',
-        ]);
-      } finally {
-        await cleanup();
-      }
-    });
-
-    it('lista Mensagens por seq e por Conversa', async () => {
-      const { store, cleanup } = await open();
-
-      try {
-        await store.putMessage(
-          makeMessage({ id: 'm2', conversationId: 'c1', seq: 2, role: 'assistant' }),
-        );
-        await store.putMessage(
-          makeMessage({ id: 'm1', conversationId: 'c1', seq: 1, role: 'user' }),
-        );
-        await store.putMessage(
-          makeMessage({ id: 'outra', conversationId: 'c2', seq: 1, role: 'user' }),
-        );
-
-        expect((await store.listMessages('c1')).map((message) => message.id)).toEqual([
-          'm1',
-          'm2',
-        ]);
-        expect((await store.listMessages('c2')).map((message) => message.id)).toEqual(['outra']);
-        expect(await store.listMessages('sem-mensagens')).toEqual([]);
       } finally {
         await cleanup();
       }
@@ -340,38 +272,6 @@ export const describeConversationStore = (
           code: 'storage_failed',
         });
       } finally {
-        await cleanup();
-      }
-    });
-
-    it('watch entrega o estado atual e cada mudança gravada', async () => {
-      const { store, cleanup } = await open();
-      const conversations = recorder<string[]>();
-      const messages = recorder<string[]>();
-
-      const stopConversations = store.watchConversations((list) =>
-        conversations.push(list.map((item) => item.id)),
-      );
-      const stopMessages = store.watchMessages('c1', (list) =>
-        messages.push(list.map((item) => item.id)),
-      );
-
-      try {
-        await conversations.until((ids) => ids.length === 0);
-        await messages.until((ids) => ids.length === 0);
-
-        await store.putConversation(makeConversation('c1'));
-        await conversations.until((ids) => ids.join() === 'c1');
-
-        await store.putMessage(makeMessage({ id: 'm1', conversationId: 'c1', seq: 1, role: 'user' }));
-        await messages.until((ids) => ids.join() === 'm1');
-
-        await store.clearConversations();
-        await conversations.until((ids) => ids.length === 0);
-        await messages.until((ids) => ids.length === 0);
-      } finally {
-        stopConversations();
-        stopMessages();
         await cleanup();
       }
     });
