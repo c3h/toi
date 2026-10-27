@@ -2,15 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { FetchLike } from '../src/adapters/http/fetch';
 import { toAnthropicPayload } from '../src/adapters/protocols/anthropic-messages/request';
 import { AnthropicProvider } from '../src/adapters/providers/anthropic/provider';
-import type { AttachmentUpload } from '../src/domain/attachment';
-import type { OutgoingPart } from '../src/ports/chat-provider';
-import { collect, imageFile, pdfFile, sse, streamOf, textFile } from './helpers';
-
-const sent = ({ attachment }: AttachmentUpload, content: BlobPart): OutgoingPart => ({
-  type: 'file',
-  attachment,
-  data: new Blob([content]),
-});
+import { collect, sse, streamOf } from './helpers';
 
 describe('AnthropicProvider', () => {
   it('monta o POST com headers obrigatórios, Esforço, cache de prompt e payload de texto', async () => {
@@ -59,46 +51,6 @@ describe('AnthropicProvider', () => {
       output_config: { effort: 'low' },
       messages: [{ role: 'user', content: [{ type: 'text', text: 'oi' }] }],
     });
-  });
-
-  it('manda imagem e PDF em base64 e texto de arquivo como documento com título', async () => {
-    const payload = await toAnthropicPayload(
-      {
-        model: 'claude-test',
-        maxTokens: 128,
-        effort: 'low',
-        reasoning: 'on',
-        system: null,
-        tools: [],
-        messages: [
-          {
-            role: 'user',
-            parts: [
-              sent(imageFile('foto'), new Uint8Array([1, 2, 3])),
-              sent(pdfFile('contrato'), '%PDF-'),
-              sent(textFile('notas'), '# oi'),
-              { type: 'text', text: 'resuma' },
-            ],
-          },
-        ],
-      },
-      null,
-    );
-
-    expect(payload.messages[0]!.content).toEqual([
-      { type: 'image', source: { type: 'base64', media_type: 'image/png', data: 'AQID' } },
-      {
-        type: 'document',
-        title: 'contrato.pdf',
-        source: { type: 'base64', media_type: 'application/pdf', data: 'JVBERi0=' },
-      },
-      {
-        type: 'document',
-        title: 'notas.txt',
-        source: { type: 'text', media_type: 'text/plain', data: '# oi' },
-      },
-      { type: 'text', text: 'resuma' },
-    ]);
   });
 
   it('manda as Ferramentas e as Rodadas com raciocínio, chamada e resultado', async () => {

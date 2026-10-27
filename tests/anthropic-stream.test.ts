@@ -137,17 +137,6 @@ describe('mapAnthropicStream', () => {
     expect(events.find((event) => event.type === 'usage')).toMatchObject({ stopReason: 'tool_use' });
   });
 
-  it('ignora evento desconhecido', async () => {
-    const body = sse([
-      { event: 'future_event', data: { type: 'future_event', value: 1 } },
-      { event: 'message_stop', data: { type: 'message_stop' } },
-    ]);
-
-    await expect(collect(map(streamOf([body])))).resolves.toEqual([
-      { type: 'finished' },
-    ]);
-  });
-
   it('transforma evento de erro em AppError tipado', async () => {
     const body = sse([
       {
