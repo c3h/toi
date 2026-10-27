@@ -1,4 +1,4 @@
-import { connect, expect, send, setMock, test } from './fixtures';
+import { connect, expect, hold, send, test } from './fixtures';
 
 /** PNG de 1×1, vermelho. */
 const PIXEL = Buffer.from(
@@ -16,12 +16,13 @@ test('anexos sobrevivem à recarga e tentar de novo reenvia os bytes', async ({ 
     { name: 'contrato.pdf', mimeType: 'application/pdf', buffer: CONTRACT },
   ]);
   await expect(page.getByText(/2 pág · /)).toBeVisible();
-  await setMock(page, { reply: 'palavra '.repeat(200), deltas: 200, delayMs: 30 });
+  const answer = await hold(page);
   await send(page, 'Leia os dois');
+  await answer.write('palavra '.repeat(20));
   await expect(page.getByText(/palavra palavra/)).toBeVisible();
   await page.getByRole('button', { name: /parar/ }).click();
 
-  const first = await page.evaluate(() => window.__bodies.at(-1));
+  const first = await answer.body();
   expect(first).toContain('"type":"image"');
   expect(first).toContain(CONTRACT.toString('base64'));
 
@@ -31,8 +32,10 @@ test('anexos sobrevivem à recarga e tentar de novo reenvia os bytes', async ({ 
   await expect(page.getByRole('dialog', { name: 'pixel.png' }).locator('img')).toBeVisible();
   await page.keyboard.press('Escape');
 
-  await setMock(page, { reply: 'Agora completa.', deltas: 1, delayMs: 0 });
+  const retry = await hold(page);
   await page.getByRole('button', { name: 'tentar de novo' }).click();
+  await retry.write('Agora completa.');
+  await retry.end();
   await expect(page.getByText('Agora completa.')).toBeVisible();
-  expect(await page.evaluate(() => window.__bodies.at(-1))).toContain(CONTRACT.toString('base64'));
+  expect(await retry.body()).toContain(CONTRACT.toString('base64'));
 });
