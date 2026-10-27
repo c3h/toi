@@ -34,6 +34,9 @@ export default defineConfig({
         test: {
           name: 'browser',
           include: ['tests/ui/**/*.test.tsx'],
+          // O teto de toda espera por evento (`expect.element`, `expect.poll`), o mesmo do
+          // Playwright no e2e: o 1 s padrão mede a máquina, e o runner do CI é mais lento.
+          expect: { poll: { timeout: 5_000 } },
           browser: {
             enabled: true,
             provider: playwright(),
